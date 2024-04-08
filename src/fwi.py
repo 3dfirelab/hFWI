@@ -1,4 +1,10 @@
+import pygrib
+import numpy as np
+import matplotlib.pyplot as plt
 import math
+import pdb 
+
+
 class FWICLASS:
 
     ############
@@ -57,11 +63,9 @@ class FWICLASS:
 
 
     ############
-    def hFFMCcalc(self,ffmc0)
+    def hFFMCcalc(self,ffmc0):
         
         m0 = (147.2*(101.0 - ffmc0))/(59.5 + ffmc0) #*Eq. 1*#
-
-        maskFuel
 
         '''
         H HU2M_DD2_12
@@ -69,9 +73,10 @@ class FWICLASS:
         T T2M_DD2_12
         '''
        
-        maskFuel = np.ones_like(ffmc0)
+        maskFuel = np.ones_like(ffmc0[0])
         idx = np.where(maskFuel==1)
         m0 = m0[idx]
+        pdb.set_trace()
         r0 = self.p[idx]
         W  = self.w[idx]
         H  = np.where(self.h[idx]>100,100.,self.h[idx])
@@ -221,17 +226,17 @@ class FWICLASS:
 
 ############
 def timeIntegration(times, 
-                           timeRain0, timeWind, 
-                           timeHumidity, timeTemperature):
+                    timeRain0, timeWind, 
+                    timeHumidity, timeTemperature):
 
-    intergrationScheme = 'LastH'
     shape   = timeWind.shape
+    dt = times[1]-times[0]
 
-    ffmc0 = np.zeros(shape) + 85.0
-    dmc0  = np.zeros(shape) + 6.0
-    dc0   = np.zeros(shape) + 15.0
+    ffmc00 = np.zeros(shape) + 85.0
+    dmc00  = np.zeros(shape) + 6.0
+    dc00   = np.zeros(shape) + 15.0
     
-    out = np.zeros(timeRain0.shape, dtype=np.type([('ffmc',float),('dmc',float),('dc',float),('isi',float),('bui',float),('fwi',float)]))
+    out = np.zeros(timeRain0.shape, dtype=np.dtype([('ffmc',float),('dmc',float),('dc',float),('isi',float),('bui',float),('fwi',float)]))
     out = out.view(np.recarray)
 
 
@@ -242,7 +247,8 @@ def timeIntegration(times,
         wind        = timeWind[it,:,:]                       # km/h
         humidity    = timeHumidity[it,:,:]                   # % (<100)
         temperature = timeTemperature[it,:,:]                # C
-            
+        mth = 0 
+
         #mth,day,temp,rhum,wind,prcp=[float(field) for field in line.strip().lstrip('[').rstrip(']').split()]
         rhum  = np.where(humidity>100,100.,humidity)
         mth = int(mth)
@@ -281,6 +287,32 @@ def timeIntegration(times,
 
 
     return ffmc
+
+if __name__ == '__main__':
+
+
+    grbs = pygrib.open('/home/paugam/Downloads/arome__001__HP1__01H__2024-04-08T00 00 00Z.grib2')
+    wind_ = grbs.select()[4].values
+    rh_   = grbs.select()[8].values
+    temp_ = np.zeros_like(rh_)+24
+    rain_ = np.zeros_like(rh_)
+    
+    wind = np.zeros([2,wind_.shape[0],wind_.shape[1]])
+    rh   = np.zeros_like(wind) 
+    temp = np.zeros_like(wind) 
+    rain = np.zeros_like(wind) 
+
+    wind[0] = wind_ 
+    rh[0]   = rh_
+    temp[0] = temp_
+    rain[0] = rain_
+
+    times = np.array([3600,7200])
+
+    out = timeIntegration(times, 
+                    rain, wind, 
+                    rh, temp)
+
 
 
 def main():
