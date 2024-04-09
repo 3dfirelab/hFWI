@@ -3,69 +3,32 @@ import numpy as np
 import matplotlib.pyplot as plt
 import math
 import pdb 
+import tools
+import datetime 
+import glob 
+from datetime import datetime, timedelta
+import pandas as pd
 
+import dataHandler
 
 class FWICLASS:
 
     ############
-    def __init__(self,temp,rhum,wind,prcp):
+    def __init__(self,temp,rhum,wind,prcp,mask):
+        self.updateMeteo(temp,rhum,wind,prcp)
+        self.mask = mask
+
+    def updateMeteo(self,temp,rhum,wind,prcp):
         self.h = rhum
         self.t = temp
         self.w = wind
         self.p = prcp
 
-
+    
     ############
-    def FFMCcalc(self,ffmc0):
-        mo = (147.2*(101.0 - ffmc0))/(59.5 + ffmc0) #*Eq. 1*#
-        if (self.p > 0.5):
-            rf = self.p - 0.5 #*Eq. 2*#
-            if(mo > 150.0):
-                mo = (mo+42.5*rf*math.exp(-100.0/(251.0-mo))* \
-                    (1.0 - math.exp(-6.93/rf)))               \
-                    + (.0015*(mo - 150.0)**2)*math.sqrt(rf) #*Eq. 3b*#
-            elif mo <= 150.0:
-                mo = mo+42.5*rf*math.exp(-100.0/(251.0-mo))*(1.0 - math.exp(-6.93/rf)) #*Eq. 3a*#
+    def hFFMCcalc(self,ffmc0, mode='hourly'):
         
-            if(mo > 250.0):
-                mo = 250.0
-        
-        ed = .942*(self.h**.679) + (11.0*math.exp((self.h-100.0)/10.0))+0.18*(21.1-self.t) \
-                                                                            *(1.0 - 1.0/math.exp(.1150 * self.h)) #*Eq. 4*#
-        if(mo < ed):
-            ew = .618*(self.h**.753) + (10.0*math.exp((self.h-100.0)/10.0)) +\
-                 .18*(21.1-self.t)*(1.0 - 1.0/math.exp(.115 * self.h)) #*Eq. 5*#
-            
-            if(mo <= ew):
-                kl = .424*(1.0-((100.0-self.h)/100.0)**1.7)+(.0694*math.sqrt(self.w)) \
-                                                            *(1.0 - ((100.0 - self.h)/100.0)**8) #*Eq. 7a*#
-                kw = kl * (.581 * math.exp(.0365 * self.t)) #*Eq. 7b*#
-                m = ew - (ew - mo)/10.0**kw #*Eq. 9*#
-            elif mo > ew:
-                m = mo
-            elif(mo == ed):
-                m = mo
-        elif mo > ed:
-            kl =.424*(1.0-(self.h/100.0)**1.7)+(.0694*math.sqrt(self.w))* \
-                                               (1.0-(self.h/100.0)**8) #*Eq. 6a*#
-            kw = kl * (.581*math.exp(.0365*self.t)) #*Eq. 6b*#
-        
-            m = ed + (mo-ed)/10.0 ** kw #*Eq. 8*#
-        
-        ffmc = (59.5 * (250.0 -m)) / (147.2 + m)#*Eq. 10*#
-        
-        if (ffmc > 101.0):
-            ffmc = 101.0
-        if (ffmc <= 0.0):
-            ffmc = 0.0
-        
-        return ffmc
-
-
-    ############
-    def hFFMCcalc(self,ffmc0):
-        
-        m0 = (147.2*(101.0 - ffmc0))/(59.5 + ffmc0) #*Eq. 1*#
+        fmc0 = (147.2*(101.0 - ffmc0))/(59.5 + ffmc0) #*Eq. 1*#
 
         '''
         H HU2M_DD2_12
@@ -73,10 +36,10 @@ class FWICLASS:
         T T2M_DD2_12
         '''
        
-        maskFuel = np.ones_like(ffmc0[0])
-        idx = np.where(maskFuel==1)
-        m0 = m0[idx]
-        pdb.set_trace()
+        maskLand = self.mask
+        idx = np.where(maskLand==1)
+        
+        m0 = fmc0[idx]
         r0 = self.p[idx]
         W  = self.w[idx]
         H  = np.where(self.h[idx]>100,100.,self.h[idx])
@@ -101,21 +64,25 @@ class FWICLASS:
         #init
         m = np.zeros_like(m0) - 999
         #try:
-        kalpha = lambda nu,W,T: (0.424*(1 - nu**1.7) + 0.0694*np.sqrt(W)*(1 - nu**8) ) *0.581*np.exp(0.0365*T)
         kbeta = lambda nu,W,T: (0.424*(1 - nu**1.7) + 0.0694*np.sqrt(W)*(1 - nu**8) ) *0.579*np.exp(0.0365*T)
+        kalpha = lambda nu,W,T: (0.424*(1 - nu**1.7) + 0.0694*np.sqrt(W)*(1 - nu**8) ) *0.581*np.exp(0.0365*T)
+        if mode == 'hourly':
+            kk =  kbeta
+        elif mode == 'daily':
+            kk =  kalpha            
 
         #desportion
         idx_ = np.where( m0 > Ed)
         nu = H/100
         #nu = np.where(H>0,H/100,0)
-        m[idx_] = Ed[idx_] + (m0[idx_] - Ed[idx_])*(10**( -1.*kbeta(nu[idx_],W[idx_],T[idx_]) ))
+        m[idx_] = Ed[idx_] + (m0[idx_] - Ed[idx_])*(10**( -1.*kk(nu[idx_],W[idx_],T[idx_]) ))
 
         #absportion
         idx_ = np.where( m0 < Ew)
         #nu = np.where(H<100,(100-H)/100,0)
         nu = (100-H)/100
         if nu.min() < 0: pdb.set_trace()
-        m[idx_] = Ew[idx_] - (Ew[idx_] - m0[idx_])*(10**( -1.*kbeta(nu[idx_],W[idx_],T[idx_]) ))
+        m[idx_] = Ew[idx_] - (Ew[idx_] - m0[idx_])*(10**( -1.*kk(nu[idx_],W[idx_],T[idx_]) ))
         #except:   
         #    pdb.set_trace()
 
@@ -123,155 +90,347 @@ class FWICLASS:
         idx_ = np.where( (Ed >= m0) & (m0 >= Ew) )
         m[idx_] = m0[idx_] 
 
-        ffmc = np.zeros_like(ffmc0)
-        ffmc = (59.5 * (250.0 -m)) / (147.2 + m)   
+        ffmc1 = np.zeros_like(ffmc0)
+        ffmc1[idx] = (59.5 * (250.0 -m)) / (147.2 + m)   
         
-        if (ffmc > 101.0):
-            ffmc = 101.0
-        if (ffmc <= 0.0):
-            ffmc = 0.0
+        ffmc1 = np.where(ffmc1>101.0,101.0, ffmc1)
+        ffmc1 = np.where(ffmc1<=0.0,0.0, ffmc1)
         
-        return ffmc
+        return ffmc1
 
 
     ############
-    def DMCcalc(self,dmc0,mth):
-        el = [6.5,7.5,9.0,12.8,13.9,13.9,12.4,10.9,9.4,8.0,7.0,6.0]
-        t = self.t
-        if (t < -1.1):
-            t = -1.1
-        rk = 1.894*(t+1.1) * (100.0-self.h) * (el[mth-1]*0.0001) #*Eqs. 16 and 17*#
-        if self.p > 1.5:
-            ra= self.p
-            rw = 0.92*ra - 1.27                                   #*Eq. 11*#
-            wmi = 20.0 + 280.0/math.exp(0.023*dmc0)               #*Eq. 12*#
-            if dmc0 <= 33.0:
-                b = 100.0 /(0.5 + 0.3*dmc0)                           #*Eq. 13a*#
+    def DMCcalc(self,dmc0,day,latitude):
+        #El = [6.5,7.5,9.0,12.8,13.9,13.9,12.4,10.9,9.4,8.0,7.0,6.0]
+        El = tools.DayLength(latitude, day.month)
+
+        maskLand = self.mask
+        idx = np.where(maskLand==1)
+        
+        t = self.t[idx]
+        p = self.p[idx]
+        t = np.where(t < -1.1,-1.1,t)
+        rk = 1.894*(t+1.1) * (100.0-self.h[idx]) * (El*0.0001)     #*Eqs. 16 and 17*#
+        pr = np.zeros_like(rk)
+        
+        idx_ = np.where(p>1.5)
+        if len(idx_[0])>0:
+            ra    = p[idx_]
+            dmc0_ = dmc0[idx][idx_]
+            rw = 0.92*ra - 1.27                                        #*Eq. 11*#
+            wmi = 20.0 + 280.0/np.exp(0.023*dmc0_)                     #*Eq. 12*#
             
-            elif dmc0 > 33.0:
-                if dmc0 <= 65.0:
-                    b = 14.0 - 1.3*math.log(dmc0)                 #*Eq. 13b*#
-                elif dmc0 > 65.0:
-                    b = 6.2 * math.log(dmc0) - 17.2               #*Eq. 13c*#
+            b = np.zeros_like(dmc0_)
+            idx__ = np.where(dmc0_<= 33.0)
+            b[idx__] = 100.0 /(0.5 + 0.3*dmc0_[idx__])                   #*Eq. 13a*#
+            
+            idx__ = np.where((dmc0_ > 33.0) & (dmc0_ <= 65.0))
+            b[idx__] = 14.0 - 1.3*np.log(dmc0_[idx__])                    #*Eq. 13b*#
+            idx__ = np.where((dmc0_ > 33.0) & (dmc0_ > 65.0))
+            b[idx__] = 6.2 * np.log(dmc0_[idx__]) - 17.2                  #*Eq. 13c*#
                      
-            wmr = wmi + (1000*rw) / (48.77+b*rw)                  #*Eq. 14*#
-            pr = 43.43 * (5.6348 - math.log(wmr-20.0))            #*Eq. 15*#
+            wmr = wmi + (1000*rw) / (48.77+b*rw)                        #*Eq. 14*#
+            pr[idx_] = 43.43 * (5.6348 - np.log(wmr-20.0))               #*Eq. 15*#
         
-        elif self.p <= 1.5:
-            pr = dmc0
+        idx_ = np.where(p<=1.5)
+        if len(idx_[0])>0:
+            pr[idx_] = dmc0[idx][idx_]
         
-        if (pr<0.0):
-            pr = 0.0
-        dmc = pr + rk
-        if(dmc<= 1.0):
-            dmc = 1.0
+        pr = np.where(pr<0.0, 0.0, pr)
+        
+        dmc_ = pr + rk
+        
+        dmc_ = np.where(dmc_<=1.0, 1.0, dmc_)
+
+        dmc = np.zeros_like(dmc0)
+        dmc[idx] = dmc_
+        
         return dmc
 
 
     ############
-    def DCcalc(self,dc0,mth):
-        fl = [-1.6, -1.6, -1.6, 0.9, 3.8, 5.8, 6.4, 5.0, 2.4, 0.4, -1.6, -1.6]
-        t = self.t
-        if(t < -2.8):
-            t = -2.8
-        pe = (0.36*(t+2.8) + fl[mth-1] )/2                     #*Eq. 22*#
+    def DCcalc(self,dc0,day,latitude):
+
+        maskLand = self.mask
+        idx = np.where(maskLand==1)
+
+        p = self.p[idx]
+        t = self.t[idx]
+        dc0_ = dc0[idx]
+
+        idx_ = np.where(p > 2.8)
+        if len(idx_[0])>0:
         
-        if pe <= 0.0:
-            pe = 0.0                              
-        if (self.p > 2.8):
-            ra = self.p
-            rw = 0.83*ra - 1.27                                 #*Eq. 18*#
-            smi = 800.0 * math.exp(-dc0/400.0)                  #*Eq. 19*#
-            dr = dc0 - 400.0*math.log( 1.0+((3.937*rw)/smi) )   #*Eqs. 20 and 21*#
-            if (dr > 0.0):
-                dc = dr + pe
+            rd = 0.83 * p[idx_] - 1.27                  #*Eq. 18*#
+            Qo = 800.0 * np.exp(-dc0_[idx_] / 400.0)          #*Eq. 19*#
+            Qr = Qo + 3.937 * rd                            #*Eq. 20*#
+            Dr = 400.0 * np.log(800.0 / Qr)                 #*Eq. 21*# 
+
+            dc_prev_ = np.copy(dc0_)
+            dc_prev_[idx_] = np.where(Dr>0, Dr, 0.0)
+
+        else: 
+            dc_prev_ = dc0_
+
+        Lf = tools.DryingFactor(latitude, day.month)
+
+        V = np.where(t >= -2.8, 0.36 * (t+2.8) + Lf, Lf)
+        V = np.where(V<0, 0.0, V)
         
-        elif self.p <= 2.8:
-            dc = dc0 + pe
+        dc_ = dc_prev_ + 0.5 * V
+
+        dc = np.zeros_like(dc0)
+        dc[idx] = dc_
+        
         return dc
 
-
+    
     ############
     def ISIcalc(self,ffmc):
-        mo = 147.2*(101.0-ffmc) / (59.5+ffmc)                             #*Eq. 1*#
-        ff = 19.115*math.exp(mo*-0.1386) * (1.0+(mo**5.31)/49300000.0)    #*Eq. 25*#
-        isi = ff * math.exp(0.05039*self.w)                               #*Eq. 26*#
+                
+        maskLand = self.mask
+        idx = np.where(maskLand==1)
+
+        ffmc_ = ffmc[idx]
+        w_    = self.w[idx]
+        
+        mo = 147.2*(101.0-ffmc_) / (59.5+ffmc_)                          #*Eq. 1*#
+        ff = 19.115*np.exp(mo*-0.1386) * (1.0+(mo**5.31)/49300000.0)     #*Eq. 25*#
+        isi_ = ff * np.exp(0.05039*w_)                                    #*Eq. 26*#
+        
+        isi = np.zeros_like(ffmc)
+        isi[idx] = isi_
+        
         return isi
 
 
     ############
     def BUIcalc(self,dmc,dc):
-        if dmc <= 0.4*dc:
-            bui = (0.8*dc*dmc) / (dmc+0.4*dc)                             #*Eq. 27a*#
-        else:
-            bui = dmc-(1.0-0.8*dc/(dmc+0.4*dc))*(0.92+(0.0114*dmc)**1.7)  #*Eq. 27b*#
+        maskLand = self.mask
+        idx = np.where(maskLand==1)
+
+        dmc_ = dmc[idx]
+        dc_  = dc[idx]
+
+        bui_ = np.where(dmc_<=0.4*dc_, 
+                       (0.8*dc_*dmc_) / (dmc_+0.4*dc_),                             #*Eq. 27a*#
+                       dmc_-(1.0-0.8*dc_/(dmc_+0.4*dc_))*(0.92+(0.0114*dmc_)**1.7)  #*Eq. 27b*#
+                       )
         
-        if bui <0.0:
-            bui = 0.0
+        bui_ = np.where(bui_<0, 0, bui_)
+
+        bui = np.zeros_like(dc)
+        bui[idx] = bui_
         
         return bui
 
+    
     ############
     def FWIcalc(self,isi,bui):
-        if bui <= 80.0:
-            bb = 0.1 * isi * (0.626*bui**0.809 + 2.0)                    #*Eq. 28a*#
-        else:
-            bb = 0.1*isi*(1000.0/(25. + 108.64/math.exp(0.023*bui)))     #*Eq. 28b*#
-        if(bb <= 1.0):
-            fwi = bb                                                     #*Eq. 30b*#
-        else:
-            fwi = math.exp(2.72 * (0.434*math.log(bb))**0.647)           #*Eq. 30a*#
+        maskLand = self.mask
+        idx = np.where(maskLand==1)
+
+        isi_ = isi[idx]
+        bui_  = bui[idx]
+        
+        bb = np.where(bui_ <= 80.0, 
+                      0.1 * isi_ * (0.626*bui_**0.809 + 2.0),                       #*Eq. 28a*#
+                      0.1 * isi_ * (1000.0/(25. + 108.64/np.exp(0.023*bui_)))       #*Eq. 28b*#
+                     )
+        
+        fwi_ = np.copy(bb)                                                            #*Eq. 30b*#
+        idx_ = np.where(bb > 1.0) 
+        fwi_[idx_] = np.exp(2.72 * (0.434*np.log(bb[idx_]))**0.647)                     #*Eq. 30a*#
+
+        fwi = np.zeros_like(isi)
+        fwi[idx] = fwi_
+        
         return fwi
 
 
-############
-def timeIntegration(times, 
-                    timeRain0, timeWind, 
-                    timeHumidity, timeTemperature):
+class Indices:
 
-    shape   = timeWind.shape
-    dt = times[1]-times[0]
+    ############
+    def __init__(self, shape, latitude, patch_index):
 
-    ffmc00 = np.zeros(shape) + 85.0
-    dmc00  = np.zeros(shape) + 6.0
-    dc00   = np.zeros(shape) + 15.0
-    
-    out = np.zeros(timeRain0.shape, dtype=np.dtype([('ffmc',float),('dmc',float),('dc',float),('isi',float),('bui',float),('fwi',float)]))
-    out = out.view(np.recarray)
-
-
-    for it, time in enumerate(times):
-
-        itm24 = np.abs(times-(time-(24*3600.))).argmin()
-        rain0       = timeRain0[itm24:it,:,:].sum(axis=0)*dt # mm -- note: in the intergaration missing time that belong to previous day
-        wind        = timeWind[it,:,:]                       # km/h
-        humidity    = timeHumidity[it,:,:]                   # % (<100)
-        temperature = timeTemperature[it,:,:]                # C
-        mth = 0 
-
-        #mth,day,temp,rhum,wind,prcp=[float(field) for field in line.strip().lstrip('[').rstrip(']').split()]
-        rhum  = np.where(humidity>100,100.,humidity)
-        mth = int(mth)
+        self.latitude = 46.45 # valeur harcodée pour arome
+        self.seaLandMask = np.ones(shape) #dataHandler.loadSeaLandMask(patch_index)
         
+        self.ffmc = np.zeros(shape) + 85.0 # valeurs prises dans la func initialisation plus bas. merci de valider 
+        self.dmc = np.zeros(shape) + 6.0
+        self.dc = np.zeros(shape) + 15.0
+        self.isi = np.zeros(shape)
+        self.bui = np.zeros(shape)
+        self.fwi = np.zeros(shape)
+
+        self.hour = 0
+        self.rain_buffer = np.zeros((24, shape[0], shape[1]))
+
+        self.needSpinup = True
+
+        self.fwisystem = FWICLASS(0, 0, 0, 0, self.seaLandMask) # valeurs updatés dans la boucle
+    
+    def integrate(self, date, IntMode, wind, rh, temp, rain):
+        
+        self.hour = date.hour
+
+        self.rain_buffer[self.hour] = rain
+        rain24 = np.sum(self.rain_buffer, axis=0)
+        
+        self.fwisystem.updateMeteo(temp, rh, wind, rain24)
+
+        if self.needSpinup:
+            # fore ffmc
+            ii = 0
+            diff = 1.e6
+            ffmc0 = self.ffmc
+            while(diff > 1.e-6):
+                ffmc1 = self.fwisystem.hFFMCcalc(ffmc0) 
+                diff = ((ffmc1 - ffmc0)**2).sum()
+                #print(diff)
+                ffmc0 = ffmc1
+                ii += 1
+            self.ffmc = ffmc1
+            self.needSpinup = False
+
+        #3 first indices
+        if IntMode == 'hourly':
+            self.ffmc = self.fwisystem.hFFMCcalc(self.ffmc,mode=IntMode)
+                
+        if self.hour == 11:  # if it is 12h00 update dmc and dc:
+            if IntMode == 'daily':
+                self.ffmc = self.fwisystem.hFFMCcalc(self.ffmc,mode=IntMode)
+            self.dmc  = self.fwisystem.DMCcalc(self.dmc,date,self.latitude)
+            self.dc   = self.fwisystem.DCcalc(self.dc,date,self.latitude)
+
+        #last three        
+        if IntMode == 'hourly':
+            self.isi = self.fwisystem.ISIcalc(self.ffmc)
+            self.bui = self.fwisystem.BUIcalc(self.dmc,self.dc)
+            self.fwi = self.fwisystem.FWIcalc(self.isi, self.bui)
+        if IntMode == 'daily':
+            if self.hour == 11:
+                self.isi = self.fwisystem.ISIcalc(self.ffmc)
+                self.bui = self.fwisystem.BUIcalc(self.dmc,self.dc)
+                self.fwi = self.fwisystem.FWIcalc(self.isi, self.bui)
+    
+    def test(self):
+        '''
+        run test against data available in 
+        https://courses.seas.harvard.edu/climate/eli/Courses/global-change-debates/Sources/Forest-fires/aridity-indices/code-for-calculating-canadian-fire-weather-index.pdf
+        '''
+        
+        df_input_test  = pd.read_csv('dataTest/data.txt', delimiter=' ')
+        df_output_test  = pd.read_csv('dataTest/outputRef.txt', delimiter=' ')
+
+        year=2024 # not important
+        
+        self.__init__(shape, latitude, 0)
+        self.needSpinup = False
+
+        it =0
+        for rowIn, rowOut in zip(df_input_test.itertuples(),df_output_test.itertuples()):
+            date = datetime(year, rowIn.month, rowIn.day, 11, 0, 0)
+            print(date.strftime('%Y-%m-%dT%H:%M:%SZ'), end = ' ' )
+            
+            wind = np.zeros(shape) + rowIn.wind
+            rh   = np.zeros(shape) + rowIn.rh
+            temp = np.zeros(shape) + rowIn.temp
+            rain = np.zeros(shape) + rowIn.prep
+            
+            IntMode = 'hourly'
+    
+            self.integrate(date, IntMode, wind, rh, temp, rain)
+            #print(self.fwisystem.h[0,0],
+            #     self.fwisystem.t[0,0],
+            #     self.fwisystem.w[0,0],
+            #     self.fwisystem.p[0,0])
+            #print(self.ffmc[0,0],self.dmc[0,0],self.dc[0,0],
+            #      self.isi[0,0],self.bui[0,0],self.fwi[0,0])
+            #print(rowOut.ffmc, rowOut.dmc,rowOut.dc,rowOut.isi,rowOut.bui,rowOut.fwi)
+            print( abs(self.ffmc[0,0]-rowOut.ffmc), 
+                   abs(self.dmc[0,0]-rowOut.dmc),
+                   abs(self.dc[0,0] -rowOut.dc),
+                   abs(self.isi[0,0]-rowOut.isi),
+                   abs(self.bui[0,0]-rowOut.bui),
+                   abs(self.fwi[0,0]-rowOut.fwi) )
+
+            it+=1
+
+
+if __name__ == '__main__':
+    
+
+    shape=[1,1]
+    latitude = 55
+    indices = Indices(shape, latitude, 0)
+    indices.test()
+
+
+
+
+
+'''
+
+############
+def timeIntegration(day, 
+                    latitude):
+
+    date_array = load_dates(day)
+    
+    #shape   = wind_array.shape[1:]
+    
+    #out = np.zeros(timeRain0.shape, dtype=np.dtype([('ffmc',float),('dmc',float),('dc',float),
+    #                                                ('isi',float),('bui',float),('fwi',float)]))
+    #out = out.view(np.recarray)
+
+    times_seconds = np.array([(xx-date_array[0]).total_seconds() for xx in date_array])
+    dt = times_seconds[1]-times_seconds[0]
+    
+    rain_last24h = []
+    
+    for it, (time_seconds, date) in enumerate(zip(times_seconds,date_array)):
+
+        print(date)
+        
+        wind, humidity, temperature, rain = dataHandler.load_data_for_date(date)
+        #wind        # km/h
+        #humidity    # % (<100)
+        #temperature # C
+        #rain        # mm
+        
+        rain_last24h.append(rain)
+        if len(rain_last24h)>24: 
+            rain_last24h = rain_last24[1:]
+        rain0       = np.array(rain_last24h).sum(axis=0) # mm 
+        #-- note: in the intergaration, before the enf of the first day we are missing rain from the previous day
+
+        time_seconds = (date.hour * 3600) + (date.minute * 60) + date.second
+        
+        humidity  = np.where(humidity>100,100.,humidity)
+                
         fwisystem = FWICLASS(temperature,humidity,wind,rain0)
 
-        #compute time integration of ffmc
+        #compute time integration of ffmc, dmc, and dc
         #----------------
         
         #get previous time data if present
-        idx0 = np.where( (times == (time-3600)) )
-        if (len(idx0[0]>=1)):
-            ffmc0 = out['ffmc'][idx0[0][0]]
-           
+        
+        if it  > 0:
+            ffmc0 = ffmc1
+            dmc0  = dmc1
+            dc0   = dc1
             flag_spinup = False
 
         else: 
             ffmc0 = ffmc00
+            dmc0  = dmc00
+            dc0   = dc00
             flag_spinup = True
-            #print 
-       
+        
         #if no previous, run spinup
         if flag_spinup: 
+            # fore ffmc
             ii = 0
             diff = 1.e6
             while(diff > 1.e-6):
@@ -279,19 +438,127 @@ def timeIntegration(times,
                 diff = ((ffmc1 - ffmc0)**2).sum()
                 ffmc0 = ffmc1
                 ii += 1
+            dmc1 = dmc0
+            dc1  = dc0
+        
         else:
             ffmc1 = fwisystem.hFFMCcalc(ffmc0)
-       
+            if abs( time_seconds - (12*3600) ) < 1:  # if it is 12h00 update dmc and dc:
+                dmc1  = fwisystem.DMCcalc(dmc0,date,latitude)
+                dc1   = fwisystem.DCcalc(dc0,date,latitude)
+            else: 
+                dmc1 = dmc0
+                dc1  = dc0
+
+        isi1  = fwisystem.ISIcalc(ffmc1)
+        bui1  = fwisystem.BUIcalc(dmc1,dc1)
         
-        out['ffmc'][it] = ffmc1
+        fwi1 = fwisystem.FWIcalc(isi1, bui1) 
+        
+        #out['ffmc'][it] = ffmc1
+        #out['dmc'][it]  = dmc1
+        #out['dc'][it]   = dc1
+
+        #out['isi'][it]  = fwisystem.ISIcalc(ffmc1)
+        #out['bui'][it]  = fwisystem.BUIcalc(dmc1,dc1)
+        
+        #out['fwi'][it]  = fwisystem.FWIcalc(out['isi'][it], out['bui'][it])
+
+    
+    return ffmc1, dmc1, dc1, isi1, bui1, fwi1
+    
+
+def load_dates(dayStart, nbreMonth=1):
+    out = []
+    date = dayStart
+    out.append(date)
+    for i in range(int(30*nbreMonth*24)):
+        date = date - timedelta(hours=1)
+        out.append(date)
+
+    return np.array(out)[::-1]
+    
+
+############
+def initialization(dayStart,
+                   latitude):
+    
+    files = glob.glob() # that depends of dayStart -- first fire is at 00h00
+    dt = 3600  # files are provided every hour
+    
+    nbre_day_since_start = 0
+    for ifile, file_ in files: 
+
+        #form file:
+        rain0       =              # mm per hour
+        wind        =              # km/h
+        humidity    =              # % (<100)
+        temperature =              # C
+        time        =              # time of the simulation - dattime
+
+        if ifile_ == 0: 
+            ffmc00 = np.zeros(shape) + 85.0
+            dmc00  = np.zeros(shape) + 6.0
+            dc00   = np.zeros(shape) + 15.0
+
+            daily_rain_accumulated = np.zeros(shape)
+            time00 = time
+            
+        #mth,day,temp,rhum,wind,prcp=[float(field) for field in line.strip().lstrip('[').rstrip(']').split()]
+        humidity  = np.where(humidity>100,100.,humidity)
+        nbre_day_since_start_ =  int((time-time00).total_seconds()/(3600*24))  #assume first files is at 00h00
+
+        flag_new_day = False
+        if nbre_day_since_start_ > nbre_day_since_start: 
+            nbre_day_since_start = True
+            nbre_day_since_start = nbre_day_since_start_
+
+        if flag_new_day: 
+            daily_rain_accumulated = np.zeros(shape)
+        else: 
+            daily_rain_accumulated +=  rain0 * dt
+        
+        fwisystem = FWICLASS(temperature,humidity,wind,daily_rain_accumulated)
+
+        #compute time integration of ffmc
+        #----------------
+        
+        #get previous time data if present
+        if ifile_ > 0: 
+            ffmc0 = ffmc_prev
+            dmc0  = dmc_prev
+            dc0   = dc_prev 
+            flag_spinup = False
+
+        else: 
+            ffmc0 = ffmc00
+            dmc0  = dmc00
+            dc0   = dc00
+            flag_spinup = True
+                
+        if flag_spinup: 
+            # fore ffmc
+            ii = 0
+            diff = 1.e6
+            while(diff > 1.e-6):
+                ffmc1 = fwisystem.hFFMCcalc(ffmc0) 
+                diff = ((ffmc1 - ffmc0)**2).sum()
+                ffmc0 = ffmc1
+                ii += 1
+                    
+        ffmc_prev = fwisystem.hFFMCcalc(ffmc0)
+        dmc_prev = fwisystem.DMCcalc(dmc0,time,latitude)
+        dc_prev = fwisystem.DCcalc(dc0,time,latitude)
+
+    
+    return ffmc_prev, dmc_prev, dc_prev
 
 
-    return ffmc
 
 if __name__ == '__main__':
 
 
-    grbs = pygrib.open('/home/paugam/Downloads/arome__001__HP1__01H__2024-04-08T00 00 00Z.grib2')
+    grbs = pygrib.open('./dataTest/arome__001__HP1__01H__2024-04-08T00 00 00Z.grib2')
     wind_ = grbs.select()[4].values
     rh_   = grbs.select()[8].values
     temp_ = np.zeros_like(rh_)+24
@@ -307,11 +574,14 @@ if __name__ == '__main__':
     temp[0] = temp_
     rain[0] = rain_
 
+    latitude = 45
+
     times = np.array([3600,7200])
 
     out = timeIntegration(times, 
                     rain, wind, 
-                    rh, temp)
+                    rh, temp, 
+                    latitude)
 
 
 
@@ -348,3 +618,4 @@ def main():
         outfile.close()
 
 #main()
+'''
