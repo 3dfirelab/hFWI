@@ -6,6 +6,7 @@ It uses:
 1. temperature at 2m
 1. resolved wind speed at 10m
 1. accumulated precipitation (mm) 
+
 and outputs FWI as well as the intermediate indices, Fine Fuel Moistuce Code (FFMC), Duff Moisture Code (DMC), Droguht Code (DC), Initial Spread Index (ISI) and Buildingup Index (BUI).
 
 The code can be run using hourly or daily time step.
