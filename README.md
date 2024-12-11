@@ -5,7 +5,8 @@ It uses:
 * relative humidity
 * temperature 
 * resolved wind speed 
-* accumulated precipitation (mm) 
+* accumulated precipitation (mm)
+
 The three first variable are extracted at model first vertical level at cell center.
 The code is only working on MesoNH output for now.
 
