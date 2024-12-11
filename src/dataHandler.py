@@ -4,9 +4,69 @@ import pygrib
 import resource
 from os import path,makedirs
 from scipy.ndimage import binary_dilation
+import glob 
+import xarray as xr 
+import pdb 
 
 SPINUP_CUTOFF=3
 RUN_REFRESH_PERIOD=24
+
+
+class MNH:
+    
+    
+    def __init__(self, filein):
+        #constant 
+        c_p = 1005.   # J  / kg / K
+        R   =  287.05 #  J / kg / K
+        kappa = R/c_p
+        pressure_ref = 1.e5 # Pa
+        
+        #open file
+        ds =  xr.open_dataset(filein)
+
+        #wind at cell center
+        ut = np.squeeze(ds.UT)
+        utc = 0.5*(np.array(ut[:,:,:-1]) + np.array(ut[:,:,1:]))
+        utc = utc[1:-1,1:-1,1:]
+
+        vt = np.squeeze(ds.VT)
+        vtc = 0.5*(np.array(vt[:,:-1,:]) + np.array(vt[:,1:,:]))
+        vtc = vtc[1:-1,1:,1:-1]
+
+        wt = np.squeeze(ds.WT)
+        wtc = 0.5*(np.array(wt[:-1,:,:]) + np.array(wt[1:,:,:]))
+        wtc = wtc[1:,1:-1,1:-1]
+
+        self.rvap     = np.squeeze(ds.RVT)[1:-1,1:-1,1:-1]
+        theta    = np.squeeze(ds.THT)[1:-1,1:-1,1:-1] 
+        self.pressure = np.squeeze(ds.PABST)[1:-1,1:-1,1:-1]
+        
+        self.wind     = (np.sqrt( utc**2+vtc**2+wtc**2))*1.e-3*3600
+        self.temp     = np.array(theta * (self.pressure/pressure_ref)**(kappa))
+        self.rh       = np.array(self.relativeHumidity())
+        self.rain    = np.squeeze(ds.ACPRR)[1:-1,1:-1]
+        
+
+    def relativeHumidity(self):
+        y_v,pressure,temperature = self.rvap, self.pressure, self.temp
+        '''
+        in:
+        yv: vapor mixing ratio kg/kg
+        pressure Pa
+        temperature K 
+        
+        out:relative humidity in %
+        '''
+        Wvap = 18.01
+        Wair = 28.85
+        # pressure at saturation form sonntag http://cires.colorado.edu/~voemel/vp.html
+        p_vsat =   np.exp(-6096.9385/temperature + 16.635794  - 2.711193e-2 * temperature  
+                          + 1.673952e-5 * temperature**2 + 2.433502 * np.log(temperature) ) * 100 
+        x_vsat = p_vsat/pressure
+        y_vsat = x_vsat*Wvap / (x_vsat*Wvap+ (1-x_vsat)*Wair) # kg/kg
+        return y_v/y_vsat * 100.
+
 
 ################
 def get_filename_for_date(package, date):
@@ -99,8 +159,53 @@ def load_patch_for_date(date, patch_index):
     return wind, rh, temp, rain
     
 
-def load_data_for_date(date):
+############
+def load_dates(flag_model, dirin):
+    
+    if flag_model == 'mnh':
+        files = sorted(glob.glob(dirin+'*.nc'))
+    
+        for ifile, file, in enumerate(files):
+            with xr.open_dataset(file) as ds: 
+                if ifile == 0 : 
+                    out = ds.time[0].data
+                else: 
+                    out = np.append(out, ds.time[0].data)
 
+    else: 
+        print('flag_model not defined yet: flag_model=',flag_model)
+        print('stop here')
+        sys.exit()
+
+    return out,np.array(files)
+
+
+##############
+def load_data_for_date(flag_model, filein):
+
+    if flag_model == 'mnh': 
+        
+        #3D
+        mnhdata = MNH(filein)
+        
+        #2D
+        #wind        # km/h
+        #humidity    # % (<100)
+        #temperature # C
+        #rain        # mm
+        wind        = mnhdata.wind[0,:,:]
+        humidity    = mnhdata.rh[0,:,:]
+        temperature = mnhdata.temp[0,:,:] - 273.14
+        rain        = mnhdata.rain[:,:]
+        
+        return wind, humidity, temperature, rain
+
+    else: 
+        print('flag_model not defined yet: flag_model=',flag_model)
+        print('stop here')
+        sys.exit()
+    
+    '''
     filename_sp1, ignore                = get_filename_for_date("SP1", date)
     filename_sp2, filename_sp2_previous = get_filename_for_date("SP2", date)
 
@@ -138,7 +243,7 @@ def load_data_for_date(date):
     # 7:Medium cloud cover:% (instant):regular_ll:surface:level 0:fcst time 7 hrs:from 202404080000
     # 8:Time integral of rain flux:kg m**-2 (accum):regular_ll:surface:level 0:fcst time 0-7 hrs (accum):from 202404080000
     # 9:Snow precipitation rate:kg m**-2 s**-1 (accum):regular_ll:surface:level 0:fcst time 0-7 hrs (accum):from 202404080000
-
+    '''
 
     return wind, rh, temp, rain
 
@@ -203,7 +308,46 @@ def load_data_for_range(start, stop):
         
         return date_array, wind_array, rh_array, temp_array, rain_array
 
-def loadSeaLandMask(path_index):
+def loadSeaLandMask(flag_model, dirin):
+
+    if flag_model == 'mnh':
+        files = sorted(glob.glob(dirin+'*.nc'))
+        
+        file = files[0]
+        with xr.open_dataset(file) as ds: 
+            mask = ds.Z0SEA[1:-1,1:-1] 
+       
+            lat2d = ds.LAT[1:-1,1:-1]
+            lon2d = ds.LON[1:-1,1:-1]
+
+        mask = np.where(mask==999,1,0)
+
+    else: 
+        print('flag_model not defined yet: flag_model=',flag_model)
+        print('stop here')
+        sys.exit()
+    '''
     grib = pygrib.open('./dataStatic/CONSTANT_AROME_EURW1S100_2024.grb')
     mask = grib.select()[1].values # =1 for land
     return binary_dilation(mask)
+    '''
+
+    return np.array(mask), np.array(lat2d), np.array(lon2d)
+
+
+def getMeanLatitdue(flag_model, dirin):
+
+    if flag_model == 'mnh':
+        files = sorted(glob.glob(dirin+'*.nc'))
+        
+        file = files[0]
+        with xr.open_dataset(file) as ds: 
+            meanlat = ds.LAT[1:-1,1:-1].mean() 
+        
+    else: 
+        print('flag_model not defined yet: flag_model=',flag_model)
+        print('stop here')
+        sys.exit()
+
+    return float(meanlat) 
+

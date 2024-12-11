@@ -8,6 +8,9 @@ import datetime
 import glob 
 from datetime import datetime, timedelta
 import pandas as pd
+import sys 
+import xarray as xr 
+import importlib 
 
 import dataHandler
 
@@ -102,7 +105,7 @@ class FWICLASS:
     ############
     def DMCcalc(self,dmc0,day,latitude):
         #El = [6.5,7.5,9.0,12.8,13.9,13.9,12.4,10.9,9.4,8.0,7.0,6.0]
-        El = tools.DayLength(latitude, day.month)
+        El = tools.DayLength_(latitude, day.timetuple().tm_yday, day.month)
 
         maskLand = self.mask
         idx = np.where(maskLand==1)
@@ -172,7 +175,7 @@ class FWICLASS:
         else: 
             dc_prev_ = dc0_
 
-        Lf = tools.DryingFactor(latitude, day.month)
+        Lf = tools.DryingFactor_(latitude, day.month)
 
         V = np.where(t >= -2.8, 0.36 * (t+2.8) + Lf, Lf)
         V = np.where(V<0, 0.0, V)
@@ -320,8 +323,8 @@ class Indices:
         https://courses.seas.harvard.edu/climate/eli/Courses/global-change-debates/Sources/Forest-fires/aridity-indices/code-for-calculating-canadian-fire-weather-index.pdf
         '''
         
-        df_input_test  = pd.read_csv('dataTest/data.txt', delimiter=' ')
-        df_output_test  = pd.read_csv('dataTest/outputRef.txt', delimiter=' ')
+        df_input_test  = pd.read_csv('../dataTest/data.txt', delimiter=' ')
+        df_output_test  = pd.read_csv('../dataTest/outputRef.txt', delimiter=' ')
 
         year=2024 # not important
         
@@ -348,85 +351,96 @@ class Indices:
             #print(self.ffmc[0,0],self.dmc[0,0],self.dc[0,0],
             #      self.isi[0,0],self.bui[0,0],self.fwi[0,0])
             #print(rowOut.ffmc, rowOut.dmc,rowOut.dc,rowOut.isi,rowOut.bui,rowOut.fwi)
-            print( abs(self.ffmc[0,0]-rowOut.ffmc), 
+            print( [ '{:.1f}  '.format(xx) for xx in [
+                   abs( np.round(self.ffmc[0,0],1)-rowOut.ffmc), 
                    abs(self.dmc[0,0]-rowOut.dmc),
                    abs(self.dc[0,0] -rowOut.dc),
                    abs(self.isi[0,0]-rowOut.isi),
                    abs(self.bui[0,0]-rowOut.bui),
-                   abs(self.fwi[0,0]-rowOut.fwi) )
+                   abs(self.fwi[0,0]-rowOut.fwi) ]])
 
             it+=1
 
 
-if __name__ == '__main__':
+
     
-
-    shape=[1,1]
-    latitude = 55
-    indices = Indices(shape, latitude, 0)
-    indices.test()
-
-
-
-
-
-'''
 
 ############
-def timeIntegration(day, 
-                    latitude):
+def timeIntegration(dirin,flag_model):
 
-    date_array = load_dates(day)
+    date_array, files_array = dataHandler.load_dates(flag_model, dirin)
+    seaMask,lat2d,lon2d = dataHandler.loadSeaLandMask(flag_model, dirin)
+    latitude =  dataHandler.getMeanLatitdue(flag_model, dirin)
     
-    #shape   = wind_array.shape[1:]
-    
-    #out = np.zeros(timeRain0.shape, dtype=np.dtype([('ffmc',float),('dmc',float),('dc',float),
-    #                                                ('isi',float),('bui',float),('fwi',float)]))
-    #out = out.view(np.recarray)
-
-    times_seconds = np.array([(xx-date_array[0]).total_seconds() for xx in date_array])
+    times_seconds = np.array([float(xx-date_array[0])/(1.e9) for xx in date_array])
     dt = times_seconds[1]-times_seconds[0]
-    
+  
+    #init loop
     rain_last24h = []
-    
-    for it, (time_seconds, date) in enumerate(zip(times_seconds,date_array)):
+    ffmc00 = np.zeros(seaMask.shape) + 85.0 # valeurs prises dans la func initialisation plus bas. merci de valider 
+    dmc00 = np.zeros(seaMask.shape) + 6.0
+    dc00 = np.zeros(seaMask.shape) + 15.0
+    time_seconds_last = 0
+    #for output
+    times_ffmc = []
+    times_ffmc_s = []
+    ffmc_arr = []
+    dmc_arr = []
+    dc_arr = []
+    isi_arr = []
+    bui_arr = []
+    fwi_arr = []
 
-        print(date)
+    for it, (time_seconds, date, file) in enumerate(zip(times_seconds,date_array,files_array)):
+
+        #if it >0:
+        #    if (time_seconds - time_seconds_last) < 3600: 
+        #        continue
+        print(date, end=' ')
         
-        wind, humidity, temperature, rain = dataHandler.load_data_for_date(date)
+        wind, humidity, temperature, rain = dataHandler.load_data_for_date(flag_model,file)
         #wind        # km/h
         #humidity    # % (<100)
         #temperature # C
         #rain        # mm
-        
+
         rain_last24h.append(rain)
         if len(rain_last24h)>24: 
             rain_last24h = rain_last24[1:]
         rain0       = np.array(rain_last24h).sum(axis=0) # mm 
-        #-- note: in the intergaration, before the enf of the first day we are missing rain from the previous day
-
-        time_seconds = (date.hour * 3600) + (date.minute * 60) + date.second
+        #-- note: in the intergaration, before the end of the first day we are missing rain from the previous day
+        
+        date_ = datetime.strptime(str(date)[:-3], "%Y-%m-%dT%H:%M:%S.%f")
+        time_seconds_since00 = (date_.hour * 3600) + (date_.minute * 60) + date_.second
         
         humidity  = np.where(humidity>100,100.,humidity)
                 
-        fwisystem = FWICLASS(temperature,humidity,wind,rain0)
+        fwisystem = FWICLASS(temperature,humidity,wind,rain0,seaMask)
 
         #compute time integration of ffmc, dmc, and dc
         #----------------
         
         #get previous time data if present
-        
-        if it  > 0:
-            ffmc0 = ffmc1
-            dmc0  = dmc1
-            dc0   = dc1
-            flag_spinup = False
+       
 
+        flag_spinup = False
+        if it == 0: 
+            flag_spinup = True
+        else:
+            if np.abs((time_seconds-3600) - np.array(times_ffmc_s)).min() != 0 : #-1h data exist, otherwise do spinup
+                flag_spinup = True
+        
+        if not(flag_spinup) : #-1h data exist, otherwise do spinup
+            ithm1 = np.abs((time_seconds-3600) - np.array(times_ffmc_s)).argmin()
+            ffmc0 = ffmc_arr[ithm1]
+            dmc0  = dmc_arr[ithm1]
+            dc0   = dc_arr[ithm1]
+            print(' ')
         else: 
+            print ('*')
             ffmc0 = ffmc00
             dmc0  = dmc00
             dc0   = dc00
-            flag_spinup = True
         
         #if no previous, run spinup
         if flag_spinup: 
@@ -443,7 +457,7 @@ def timeIntegration(day,
         
         else:
             ffmc1 = fwisystem.hFFMCcalc(ffmc0)
-            if abs( time_seconds - (12*3600) ) < 1:  # if it is 12h00 update dmc and dc:
+            if abs( time_seconds_since00 - (12*3600) ) < 1:  # if it is 12h00 update dmc and dc:
                 dmc1  = fwisystem.DMCcalc(dmc0,date,latitude)
                 dc1   = fwisystem.DCcalc(dc0,date,latitude)
             else: 
@@ -454,168 +468,67 @@ def timeIntegration(day,
         bui1  = fwisystem.BUIcalc(dmc1,dc1)
         
         fwi1 = fwisystem.FWIcalc(isi1, bui1) 
+       
+        time_seconds_last = time_seconds
         
-        #out['ffmc'][it] = ffmc1
-        #out['dmc'][it]  = dmc1
-        #out['dc'][it]   = dc1
+        times_ffmc.append(date) 
+        times_ffmc_s.append( float(times_ffmc[-1]-date_array[0])/(1.e9) ) 
 
-        #out['isi'][it]  = fwisystem.ISIcalc(ffmc1)
-        #out['bui'][it]  = fwisystem.BUIcalc(dmc1,dc1)
-        
-        #out['fwi'][it]  = fwisystem.FWIcalc(out['isi'][it], out['bui'][it])
-
-    
-    return ffmc1, dmc1, dc1, isi1, bui1, fwi1
-    
-
-def load_dates(dayStart, nbreMonth=1):
-    out = []
-    date = dayStart
-    out.append(date)
-    for i in range(int(30*nbreMonth*24)):
-        date = date - timedelta(hours=1)
-        out.append(date)
-
-    return np.array(out)[::-1]
-    
-
-############
-def initialization(dayStart,
-                   latitude):
-    
-    files = glob.glob() # that depends of dayStart -- first fire is at 00h00
-    dt = 3600  # files are provided every hour
-    
-    nbre_day_since_start = 0
-    for ifile, file_ in files: 
-
-        #form file:
-        rain0       =              # mm per hour
-        wind        =              # km/h
-        humidity    =              # % (<100)
-        temperature =              # C
-        time        =              # time of the simulation - dattime
-
-        if ifile_ == 0: 
-            ffmc00 = np.zeros(shape) + 85.0
-            dmc00  = np.zeros(shape) + 6.0
-            dc00   = np.zeros(shape) + 15.0
-
-            daily_rain_accumulated = np.zeros(shape)
-            time00 = time
-            
-        #mth,day,temp,rhum,wind,prcp=[float(field) for field in line.strip().lstrip('[').rstrip(']').split()]
-        humidity  = np.where(humidity>100,100.,humidity)
-        nbre_day_since_start_ =  int((time-time00).total_seconds()/(3600*24))  #assume first files is at 00h00
-
-        flag_new_day = False
-        if nbre_day_since_start_ > nbre_day_since_start: 
-            nbre_day_since_start = True
-            nbre_day_since_start = nbre_day_since_start_
-
-        if flag_new_day: 
-            daily_rain_accumulated = np.zeros(shape)
-        else: 
-            daily_rain_accumulated +=  rain0 * dt
-        
-        fwisystem = FWICLASS(temperature,humidity,wind,daily_rain_accumulated)
-
-        #compute time integration of ffmc
-        #----------------
-        
-        #get previous time data if present
-        if ifile_ > 0: 
-            ffmc0 = ffmc_prev
-            dmc0  = dmc_prev
-            dc0   = dc_prev 
-            flag_spinup = False
-
-        else: 
-            ffmc0 = ffmc00
-            dmc0  = dmc00
-            dc0   = dc00
-            flag_spinup = True
-                
-        if flag_spinup: 
-            # fore ffmc
-            ii = 0
-            diff = 1.e6
-            while(diff > 1.e-6):
-                ffmc1 = fwisystem.hFFMCcalc(ffmc0) 
-                diff = ((ffmc1 - ffmc0)**2).sum()
-                ffmc0 = ffmc1
-                ii += 1
-                    
-        ffmc_prev = fwisystem.hFFMCcalc(ffmc0)
-        dmc_prev = fwisystem.DMCcalc(dmc0,time,latitude)
-        dc_prev = fwisystem.DCcalc(dc0,time,latitude)
+        ffmc_arr.append(ffmc1)
+        dmc_arr.append(dmc1)
+        dc_arr.append(dc1)
+        isi_arr.append(isi1)
+        bui_arr.append(bui1)
+        fwi_arr.append(fwi1)
 
     
-    return ffmc_prev, dmc_prev, dc_prev
+    # Combine all arrays into one dictionary
+    data_dict = {
+        "FFMC": ffmc_arr,
+        "DMC": dmc_arr,
+        "DC":  dc_arr,
+        "ISI": isi_arr,
+        "BUI": bui_arr,
+        "FWI": fwi_arr
+    }
 
+    # Create an xarray.DataArray for each variable
+    data_arrays = {
+        key: xr.DataArray(
+            data=np.stack(value),  # Stack 2D arrays along a new dimension (time)
+            dims=["time", "y", "x"],  # Dimensions: time, y (rows), x (cols)
+            coords={"time": times_ffmc,
+                    "lon": (("y", "x"), lon2d),  # Add 2D longitude
+                    "lat": (("y", "x"), lat2d),  # Add 2D latitude
+                    },
+            name=key,
+        )
+        for key, value in data_dict.items()
+    }
 
+    # Combine into a single xarray.Dataset
+    ds = xr.Dataset(data_arrays)
+    
+    return ds
+    
 
+###########################
 if __name__ == '__main__':
-
-
-    grbs = pygrib.open('./dataTest/arome__001__HP1__01H__2024-04-08T00 00 00Z.grib2')
-    wind_ = grbs.select()[4].values
-    rh_   = grbs.select()[8].values
-    temp_ = np.zeros_like(rh_)+24
-    rain_ = np.zeros_like(rh_)
+###########################
     
-    wind = np.zeros([2,wind_.shape[0],wind_.shape[1]])
-    rh   = np.zeros_like(wind) 
-    temp = np.zeros_like(wind) 
-    rain = np.zeros_like(wind) 
+    importlib.reload(dataHandler)
 
-    wind[0] = wind_ 
-    rh[0]   = rh_
-    temp[0] = temp_
-    rain[0] = rain_
+    flag_test = False
 
-    latitude = 45
-
-    times = np.array([3600,7200])
-
-    out = timeIntegration(times, 
-                    rain, wind, 
-                    rh, temp, 
-                    latitude)
-
-
-
-def main():
-    ffmc0 = 85.0
-    dmc0 = 6.0
-    dc0 = 15.0
-    infile = open('data.txt','r')
-    outfile = open('fwioutput.txt','w')
-    try:
-        for line in infile:
-            mth,day,temp,rhum,wind,prcp=[float(field) for field in line.strip().lstrip('[').rstrip(']').split()]
-            if rhum>100.0:
-                rhum = 100.0
-            mth = int(mth)
-            
-            fwisystem = FWICLASS(temp,rhum,wind,prcp)
-            
-            ffmc = fwisystem.FFMCcalc(ffmc0)
-            dmc  = fwisystem.DMCcalc(dmc0,mth)
-            dc   = fwisystem.DCcalc(dc0,mth)
-            isi  = fwisystem.ISIcalc(ffmc)
-            bui  = fwisystem.BUIcalc(dmc,dc)
-            fwi  = fwisystem.FWIcalc(isi,bui)
-            
-            ffmc0 = ffmc
-            dmc0  = dmc
-            dc0   = dc
-
-            outfile.write("%s %s %s %s %s %s\n"%(str(ffmc),str(dmc),str(dc),str(isi),str(bui),str(fwi)))
+    if flag_test:
+        shape=[1,1]
+        latitude = 55
+        indices = Indices(shape, latitude, 0)
+        indices.test()
+        sys.exit() 
     
-    finally:
-        infile.close()
-        outfile.close()
+    dirin = '/home/paugam/Src/hFWI/dataTest/MNH/'
+    flag_model = 'mnh'
+    dataset = timeIntegration(dirin,flag_model)
 
-#main()
-'''
+
