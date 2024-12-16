@@ -7,6 +7,7 @@ from scipy.ndimage import binary_dilation
 import glob 
 import xarray as xr 
 import pdb 
+import f90nml
 
 SPINUP_CUTOFF=3
 RUN_REFRESH_PERIOD=24
@@ -160,24 +161,31 @@ def load_patch_for_date(date, patch_index):
     
 
 ############
-def load_dates(flag_model, dirin):
+def load_dates_and_filenames(flag_model, dirin, iseg):
     
     if flag_model == 'mnh':
-        files = sorted(glob.glob(dirin+'*.nc'))
-    
-        for ifile, file, in enumerate(files):
-            with xr.open_dataset(file) as ds: 
-                if ifile == 0 : 
-                    out = ds.time[0].data
-                else: 
-                    out = np.append(out, ds.time[0].data)
+        
+        exsegnam = f90nml.read(dirin+'/EXSEG1.nam')
 
-    else: 
+        files = sorted(glob.glob(dirin+'/{:s}.{:d}*.nc'.format(exsegnam['NAM_CONF']['CEXP'],iseg)))
+        files_out = []
+        out = None
+        for ifile, file, in enumerate(files):
+            if '000.nc' in file: continue
+            with xr.open_dataset(file) as ds: 
+                time_ = ds.time[0].data
+                if out is None: 
+                    out = np.array([time_])
+                else:
+                    if out[-1]-time_ == 0: continue
+                    out = np.append(out, time_)
+            files_out.append(file)
+    else:   
         print('flag_model not defined yet: flag_model=',flag_model)
         print('stop here')
         sys.exit()
-
-    return out,np.array(files)
+    
+    return out,np.array(files_out), exsegnam['NAM_CONF']['CEXP']
 
 
 ##############
@@ -308,10 +316,9 @@ def load_data_for_range(start, stop):
         
         return date_array, wind_array, rh_array, temp_array, rain_array
 
-def loadSeaLandMask(flag_model, dirin):
+def loadSeaLandMask(flag_model, dirin, files):
 
     if flag_model == 'mnh':
-        files = sorted(glob.glob(dirin+'*.nc'))
         
         file = files[0]
         with xr.open_dataset(file) as ds: 
@@ -335,11 +342,9 @@ def loadSeaLandMask(flag_model, dirin):
     return np.array(mask), np.array(lat2d), np.array(lon2d)
 
 
-def getMeanLatitdue(flag_model, dirin):
+def getMeanLatitdue(flag_model, dirin, files):
 
     if flag_model == 'mnh':
-        files = sorted(glob.glob(dirin+'*.nc'))
-        
         file = files[0]
         with xr.open_dataset(file) as ds: 
             meanlat = ds.LAT[1:-1,1:-1].mean() 

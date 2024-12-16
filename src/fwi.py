@@ -11,7 +11,9 @@ import pandas as pd
 import sys 
 import xarray as xr 
 import importlib 
+import os 
 
+#homebrewed
 import dataHandler
 
 class FWICLASS:
@@ -366,12 +368,14 @@ class Indices:
     
 
 ############
-def timeIntegration(dirin,flag_model):
+def timeIntegration(dirin,flag_model,iseg):
 
-    date_array, files_array = dataHandler.load_dates(flag_model, dirin)
-    seaMask,lat2d,lon2d = dataHandler.loadSeaLandMask(flag_model, dirin)
-    latitude =  dataHandler.getMeanLatitdue(flag_model, dirin)
+    date_array, files_array, cexp = dataHandler.load_dates_and_filenames(flag_model, dirin, iseg)
+    seaMask,lat2d,lon2d = dataHandler.loadSeaLandMask(flag_model, dirin, files_array)
+    latitude =  dataHandler.getMeanLatitdue(flag_model, dirin, files_array)
     
+    print ('{:d} files found'.format(len(files_array)))
+
     times_seconds = np.array([float(xx-date_array[0])/(1.e9) for xx in date_array])
     dt = times_seconds[1]-times_seconds[0]
   
@@ -406,7 +410,7 @@ def timeIntegration(dirin,flag_model):
 
         rain_last24h.append(rain)
         if len(rain_last24h)>24: 
-            rain_last24h = rain_last24[1:]
+            rain_last24h = rain_last24h[1:]
         rain0       = np.array(rain_last24h).sum(axis=0) # mm 
         #-- note: in the intergaration, before the end of the first day we are missing rain from the previous day
         
@@ -437,7 +441,7 @@ def timeIntegration(dirin,flag_model):
             dc0   = dc_arr[ithm1]
             print(' ')
         else: 
-            print ('*')
+            print (' spinOn')
             ffmc0 = ffmc00
             dmc0  = dmc00
             dc0   = dc00
@@ -458,8 +462,11 @@ def timeIntegration(dirin,flag_model):
         else:
             ffmc1 = fwisystem.hFFMCcalc(ffmc0)
             if abs( time_seconds_since00 - (12*3600) ) < 1:  # if it is 12h00 update dmc and dc:
-                dmc1  = fwisystem.DMCcalc(dmc0,date,latitude)
-                dc1   = fwisystem.DCcalc(dc0,date,latitude)
+                try: 
+                    dmc1  = fwisystem.DMCcalc(dmc0,date_,latitude)
+                    dc1   = fwisystem.DCcalc(dc0,date_,latitude)
+                except: 
+                    pdb.set_trace()
             else: 
                 dmc1 = dmc0
                 dc1  = dc0
@@ -498,8 +505,8 @@ def timeIntegration(dirin,flag_model):
             data=np.stack(value),  # Stack 2D arrays along a new dimension (time)
             dims=["time", "y", "x"],  # Dimensions: time, y (rows), x (cols)
             coords={"time": times_ffmc,
-                    "lon": (("y", "x"), lon2d),  # Add 2D longitude
-                    "lat": (("y", "x"), lat2d),  # Add 2D latitude
+                    "x": lon2d[0,:],  # Add 2D longitude
+                    "y": lat2d[:,0],  # Add 2D latitude
                     },
             name=key,
         )
@@ -508,8 +515,8 @@ def timeIntegration(dirin,flag_model):
 
     # Combine into a single xarray.Dataset
     ds = xr.Dataset(data_arrays)
-    
-    return ds
+    ds.rio.write_crs(4326) 
+    return ds.rio.write_crs(4326), cexp
     
 
 ###########################
@@ -527,8 +534,11 @@ if __name__ == '__main__':
         indices.test()
         sys.exit() 
     
-    dirin = '/home/paugam/Src/hFWI/dataTest/MNH/'
+    dirin = '/data/paugam/MNH/Cat_PdV/006_mnhSolo'
     flag_model = 'mnh'
-    dataset = timeIntegration(dirin,flag_model)
+    iseg = 1
+    dataset, cexp = timeIntegration(dirin,flag_model,iseg)
 
+    os.makedirs(dirin+'/Postproc/FWI/', exist_ok=True)
+    dataset.to_netcdf(dirin+'/Postproc/FWI/{:s}_fwi.nc'.format(cexp))
 
