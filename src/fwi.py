@@ -437,8 +437,8 @@ def timeIntegration(dirin,flag_model,iseg):
         if not(flag_spinup) : #-1h data exist, otherwise do spinup
             ithm1 = np.abs((time_seconds-3600) - np.array(times_ffmc_s)).argmin()
             ffmc0 = ffmc_arr[ithm1]
-            dmc0  = dmc_arr[ithm1]
-            dc0   = dc_arr[ithm1]
+            dmc0  = dmc_arr[-1] # for dmc0 and dc0 we use always the last one to update at 12h
+            dc0   = dc_arr[-1]
             print(' ')
         else: 
             print (' spinOn')
@@ -481,12 +481,12 @@ def timeIntegration(dirin,flag_model,iseg):
         times_ffmc.append(date) 
         times_ffmc_s.append( float(times_ffmc[-1]-date_array[0])/(1.e9) ) 
 
-        ffmc_arr.append(ffmc1)
-        dmc_arr.append(dmc1)
-        dc_arr.append(dc1)
-        isi_arr.append(isi1)
-        bui_arr.append(bui1)
-        fwi_arr.append(fwi1)
+        ffmc_arr.append(np.where(seaMask==1,ffmc1,np.nan))
+        dmc_arr.append(np.where(seaMask==1,dmc1,np.nan))
+        dc_arr.append(np.where(seaMask==1,dc1,np.nan))
+        isi_arr.append(np.where(seaMask==1,isi1,np.nan))
+        bui_arr.append(np.where(seaMask==1,bui1,np.nan))
+        fwi_arr.append(np.where(seaMask==1,fwi1,np.nan))
 
     
     # Combine all arrays into one dictionary
@@ -503,19 +503,30 @@ def timeIntegration(dirin,flag_model,iseg):
     data_arrays = {
         key: xr.DataArray(
             data=np.stack(value),  # Stack 2D arrays along a new dimension (time)
-            dims=["time", "y", "x"],  # Dimensions: time, y (rows), x (cols)
+            dims=["time", "lat", "lon"],  # Dimensions: time, y (rows), x (cols)
             coords={"time": times_ffmc,
-                    "x": lon2d[0,:],  # Add 2D longitude
-                    "y": lat2d[:,0],  # Add 2D latitude
+                    "lon": lon2d[0,:].astype(np.float32),  # Add 2D longitude
+                    "lat": lat2d[:,0].astype(np.float32),  # Add 2D latitude
                     },
             name=key,
         )
         for key, value in data_dict.items()
     }
 
+
     # Combine into a single xarray.Dataset
     ds = xr.Dataset(data_arrays)
     ds.rio.write_crs(4326) 
+    ds.lon.attrs['long_name'] = "Longitude"
+    ds.lon.attrs['units'] = "degrees_east"
+    ds.lon.attrs['axis'] = "X"
+    ds.lon.attrs['standard_name'] = "longitude"
+
+    ds.lat.attrs['long_name'] = "Latitude"
+    ds.lat.attrs['units'] = "degrees_north"
+    ds.lat.attrs['axis'] = "Y"
+    ds.lat.attrs['standard_name'] = "latitude"
+
     return ds.rio.write_crs(4326), cexp
     
 
