@@ -71,7 +71,13 @@ if __name__ == '__main__':
         #FWI
         fig, ax = plt.subplots(figsize=(9, 7), subplot_kw={'projection': projection})
 
-        ds.FWI.isel(time=it).plot(ax=ax,cmap='Reds',vmin=fwimin,vmax=fwimax)
+        #ds.FWI.isel(time=it).plot(ax=ax,cmap='Reds',vmin=fwimin,vmax=fwimax)
+
+        ds.FWI.isel(time=it).plot(ax=ax,
+            levels = [0.0, 5.2, 11.2, 21.3, 38.0, 50.0],
+            colors = ["#008000", "#FFFF00", "#FFA500", "#FF0000", "#654321", "#000000"],
+            label = ['Very low', 'Low', 'Moderate', 'High', 'Very high', 'Extreme'],
+        )
 
         ax.coastlines(resolution='10m', color='black', linewidth=1)
         ax.add_feature(cfeature.BORDERS, linestyle=':')

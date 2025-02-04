@@ -16,6 +16,12 @@ import os
 #homebrewed
 import dataHandler
 
+def get_Ed(H,T):
+    return 0.942*(H**0.679) + 11*(np.exp((H - 100)/10)) + 0.18*(21.1 - T)*(1 - np.exp(-0.115*H))
+    
+def get_Ew(H,T):
+    return 0.618*(H**0.753) + 10*(np.exp((H - 100)/10)) + 0.18*(21.1 - T)*(1 - np.exp(-0.115*H))
+
 class FWICLASS:
 
     ############
@@ -63,8 +69,8 @@ class FWICLASS:
         #    pdb.set_trace()
 
         # compute Equilibrium Moisture Content (EMC) for desportion (Ed) and Absportion (Ew)
-        Ed = 0.942*(H**0.679) + 11*(np.exp((H - 100)/10)) + 0.18*(21.1 - T)*(1 - np.exp(-0.115*H))
-        Ew = 0.618*(H**0.753) + 10*(np.exp((H - 100)/10)) + 0.18*(21.1 - T)*(1 - np.exp(-0.115*H))
+        Ed = get_Ed(H,T) #0.942*(H**0.679) + 11*(np.exp((H - 100)/10)) + 0.18*(21.1 - T)*(1 - np.exp(-0.115*H))
+        Ew = get_Ew(H,T) #0.618*(H**0.753) + 10*(np.exp((H - 100)/10)) + 0.18*(21.1 - T)*(1 - np.exp(-0.115*H))
 
         #init
         m = np.zeros_like(m0) - 999
@@ -381,7 +387,7 @@ def timeIntegration(dirin,flag_model,iseg):
   
     #init loop
     rain_last24h = []
-    ffmc00 = np.zeros(seaMask.shape) + 85.0 # valeurs prises dans la func initialisation plus bas. merci de valider 
+    ffmc00 = np.zeros(seaMask.shape) + 20.0 # valeurs prises dans la func initialisation plus bas. merci de valider 
     dmc00 = np.zeros(seaMask.shape) + 6.0
     dc00 = np.zeros(seaMask.shape) + 15.0
     time_seconds_last = 0
@@ -441,11 +447,17 @@ def timeIntegration(dirin,flag_model,iseg):
             dc0   = dc_arr[-1]
             print(' ')
         else: 
-            print (' spinOn')
             ffmc0 = ffmc00
+            maskLand_ = fwisystem.mask
+            idx = np.where(maskLand_==1)
+            #H_  = np.where(fwisystem.h[idx]>100,100.,fwisystem.h[idx])
+            #T_  = fwisystem.t[idx]
+            #ffmc0 = np.zeros(maskLand_.shape)-999
+            #ffmc0[idx] = 0.5*(get_Ed(H_,T_) + get_Ew(H_,T_))
             dmc0  = dmc00
             dc0   = dc00
-        
+            print (' spinOn, ffmc00 = ', ffmc0[idx].mean())
+       
         #if no previous, run spinup
         if flag_spinup: 
             # fore ffmc
@@ -460,7 +472,10 @@ def timeIntegration(dirin,flag_model,iseg):
             dc1  = dc0
         
         else:
-            ffmc1 = fwisystem.hFFMCcalc(ffmc0)
+            #ffmc1 =  0.75 * fwisystem.hFFMCcalc(ffmc0) +\
+            #         0.25 * ffmc_arr[-1]
+            ffmc1 =  fwisystem.hFFMCcalc(ffmc0) 
+
             if abs( time_seconds_since00 - (12*3600) ) < 1:  # if it is 12h00 update dmc and dc:
                 try: 
                     dmc1  = fwisystem.DMCcalc(dmc0,date_,latitude)
