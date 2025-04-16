@@ -8,14 +8,14 @@ import glob
 import xarray as xr 
 import pdb 
 import f90nml
+import os 
+import pandas as pd
 
 SPINUP_CUTOFF=3
 RUN_REFRESH_PERIOD=24
 
 
 class MNH:
-    
-    
     def __init__(self, filein):
         #constant 
         c_p = 1005.   # J  / kg / K
@@ -70,7 +70,9 @@ class MNH:
 
 
 ################
-def get_filename_for_date(package, date):
+def get_filename_for_date(package, date, dir):
+    
+    date = pd.to_datetime(date).to_pydatetime()
     run = date
     while run.hour % RUN_REFRESH_PERIOD != 0:
         run = run + timedelta(hours=-1)
@@ -78,16 +80,17 @@ def get_filename_for_date(package, date):
     if echeance < SPINUP_CUTOFF:
         run = run + timedelta(hours=-RUN_REFRESH_PERIOD)
 
-    run_txt = run.strftime("%Y-%m-%dT%H:%M:%SZ")
+    run_txt = run.strftime("%Y-%m-%d")
 
     date_txt_current = date.strftime("%Y-%m-%dT%H:%M:%SZ")
 
     date_previous = date + timedelta(hours=-1)
     date_txt_previous = date_previous.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    current = f"/home/fire/data/arome_ramdisk/{run_txt}/{date_txt_current}/{package}.grib"
-    previous = f"/home/fire/data/arome_ramdisk/{run_txt}/{date_txt_previous}/{package}.grib"
-    
+    current = f"{dir}/{run_txt}.{date.hour:02d}Z.{hour:02d}.{package}.grib2"
+    previous = f"{dir}/{package}.grib"
+   
+    pdb.set_trace()
     return current, previous
 
 
@@ -180,16 +183,44 @@ def load_dates_and_filenames(flag_model, dirin, iseg):
                     if out[-1]-time_ == 0: continue
                     out = np.append(out, time_)
             files_out.append(file)
+   
+        cexp = exsegnam['NAM_CONF']['CEXP']
+
+    elif flag_model == 'arome':
+        
+        files = sorted(glob.glob(dirin+'/*{:s}*.grib2'.format('SP1')))
+        day_str =  os.path.basename(files[0]).split('.')[0]
+        hour_str =  os.path.basename(files[0]).split('.')[1][:-1]
+   
+        base_dt = datetime.strptime(day_str + hour_str, "%Y%m%d%H") 
+        
+        out = None
+        files_out = []
+        for ifile, file, in enumerate(files):
+       
+            step_str =  os.path.basename(file).split('.')[2][:-1]
+            if int(step_str) == 0 : continue
+            time_ = base_dt + timedelta(hours=int(step_str))
+            
+            if out is None: 
+                out = np.array([time_])
+            else:
+                if out[-1]-time_ == 0: continue
+                out = np.append(out, time_)
+            files_out.append(file)
+
+        cexp = None 
+
     else:   
         print('flag_model not defined yet: flag_model=',flag_model)
         print('stop here')
         sys.exit()
     
-    return out,np.array(files_out), exsegnam['NAM_CONF']['CEXP']
+    return np.array(out, dtype='datetime64[ns]'),np.array(files_out), cexp
 
 
 ##############
-def load_data_for_date(flag_model, filein):
+def load_data_for_date(flag_model,date, filein, it):
 
     if flag_model == 'mnh': 
         
@@ -206,54 +237,88 @@ def load_data_for_date(flag_model, filein):
         temperature = mnhdata.temp[0,:,:] - 273.14
         rain        = mnhdata.rain[:,:]
         
-        return wind, humidity, temperature, rain
+
+    elif flag_model == 'arome': 
+
+        filename_sp1 = filein
+        filename_sp2 = filein.replace('SP1','SP2') 
+        filename_sp2_previous = get_previous(filename_sp2, it)
+
+        grib_sp1 = pygrib.open(filename_sp1)
+        grib_sp2 = pygrib.open(filename_sp2)
+        if filename_sp2_previous is not None:
+            grib_sp2_previous = pygrib.open(filename_sp2_previous)
+
+        wind_u = grib_sp1.select(shortName='10u')[0].values
+        wind_v = grib_sp1.select(shortName='10v')[0].values
+
+        wind = np.sqrt(wind_u**2 + wind_v**2) * 3.6
+
+        humidity = grib_sp1.select(shortName='2r')[0].values # %
+        temperature = grib_sp1.select(shortName='2t')[0].values -273.15 # celcius
+        
+        rain_acc_current = grib_sp2.select(shortName='tirf')[0].values # kg/m2 = mm/m2
+        if filename_sp2_previous is not None:
+            rain_acc_previous = grib_sp2_previous.select(shortName='tirf')[0].values
+            rain = rain_acc_current - rain_acc_previous # acc sur 1h
+        else: 
+            rain = rain_acc_current 
+        
+        # sp1
+        # 1:2 metre temperature:K (instant):regular_ll:heightAboveGround:level 2 m:fcst time 7 hrs:from 202404080000
+        # 2:2 metre relative humidity:% (instant):regular_ll:heightAboveGround:level 2 m:fcst time 7 hrs:from 202404080000
+        # 3:10 metre U wind component:m s**-1 (instant):regular_ll:heightAboveGround:level 10 m:fcst time 7 hrs:from 202404080000
+        # 4:10 metre V wind component:m s**-1 (instant):regular_ll:heightAboveGround:level 10 m:fcst time 7 hrs:from 202404080000
+        # 5:10 metre eastward wind gust since previous post-processing:m s**-1 (max):regular_ll:heightAboveGround:level 10 m:fcst time 6-7 hrs (max):from 202404080000
+        # 6:10 metre northward wind gust since previous post-processing:m s**-1 (max):regular_ll:heightAboveGround:level 10 m:fcst time 6-7 hrs (max):from 202404080000
+        # sp2
+        # 1:Convective Available Potential Energy instantaneous:m**2 s**-2 (instant):regular_ll:unknown:levels 0-3000:fcst time 7 hrs:from 202404080000
+        # 2:193:193 (instant):regular_ll:surface:level 0:fcst time 7 hrs:from 202404080000
+        # 3:Graupel (snow pellets) precipitation rate:kg m-2 s-1 (accum):regular_ll:surface:level 0:fcst time 0-7 hrs (accum):from 202404080000
+        # 4:Surface pressure:Pa (instant):regular_ll:surface:level 0:fcst time 7 hrs:from 202404080000
+        # 5:Low cloud cover:% (instant):regular_ll:surface:level 0:fcst time 7 hrs:from 202404080000
+        # 6:High cloud cover:% (instant):regular_ll:surface:level 0:fcst time 7 hrs:from 202404080000
+        # 7:Medium cloud cover:% (instant):regular_ll:surface:level 0:fcst time 7 hrs:from 202404080000
+        # 8:Time integral of rain flux:kg m**-2 (accum):regular_ll:surface:level 0:fcst time 0-7 hrs (accum):from 202404080000
+        # 9:Snow precipitation rate:kg m**-2 s**-1 (accum):regular_ll:surface:level 0:fcst time 0-7 hrs (accum):from 202404080000
 
     else: 
         print('flag_model not defined yet: flag_model=',flag_model)
         print('stop here')
         sys.exit()
     
-    '''
-    filename_sp1, ignore                = get_filename_for_date("SP1", date)
-    filename_sp2, filename_sp2_previous = get_filename_for_date("SP2", date)
 
-    grib_sp1 = pygrib.open(filename_sp1)
-    grib_sp2 = pygrib.open(filename_sp2)
-    grib_sp2_previous = pygrib.open(filename_sp2)
+    return wind, humidity, temperature, rain
 
-    wind_u = grib_sp1.select(shortName='10u')[0].values
-    wind_v = grib_sp1.select(shortName='10v')[0].values
+def get_previous(name, iname):
 
-    wind = np.sqrt(wind_u**2 + wind_v**2) * 3.6
+    day_str =  os.path.basename(name).split('.')[0]
+    hour_str = os.path.basename(name).split('.')[1][:-1]
+    step_str = os.path.basename(name).split('.')[2][:-1]
+    try: 
+        date_base = datetime.strptime(day_str + '{:02d}'.format(int(hour_str)), "%Y%m%d%H") 
+        datet = datetime.strptime(day_str + '{:02d}'.format(int(hour_str)), "%Y%m%d%H") + timedelta(hours=int(step_str))
+    except: 
+        pdb.set_trace()
 
-    rh = grib_sp1.select(shortName='2r')[0].values # %
-    temp = grib_sp1.select(shortName='2t')[0].values -273.15 # celcius
+    if  iname == 0: 
+        return None
     
-    rain_acc_current = grib_sp2.select(shortName='tirf')[0].values # kg/m2 = mm/m2
-    rain_acc_previous = grib_sp2_previous.select(shortName='tirf')[0].values
+    else: 
+        datet_prev = datet + timedelta(hours=-1)
+        
+        day_str_prev = day_str #datet_prev.strftime("%Y%m%d")
+        try:
+            step_str_prev = '{:02d}'.format( int ((datet_prev - date_base).total_seconds()/3600) )
+        except: 
+            pdb.set_trace()
+        name_prev = name.replace(day_str, day_str_prev).replace(step_str+'H',step_str_prev+'H')
+    
+        if not(os.path.isfile(name_prev)):pdb.set_trace()
 
-    rain = rain_acc_current - rain_acc_previous # acc sur 1h
+        return name_prev
 
-    # sp1
-    # 1:2 metre temperature:K (instant):regular_ll:heightAboveGround:level 2 m:fcst time 7 hrs:from 202404080000
-    # 2:2 metre relative humidity:% (instant):regular_ll:heightAboveGround:level 2 m:fcst time 7 hrs:from 202404080000
-    # 3:10 metre U wind component:m s**-1 (instant):regular_ll:heightAboveGround:level 10 m:fcst time 7 hrs:from 202404080000
-    # 4:10 metre V wind component:m s**-1 (instant):regular_ll:heightAboveGround:level 10 m:fcst time 7 hrs:from 202404080000
-    # 5:10 metre eastward wind gust since previous post-processing:m s**-1 (max):regular_ll:heightAboveGround:level 10 m:fcst time 6-7 hrs (max):from 202404080000
-    # 6:10 metre northward wind gust since previous post-processing:m s**-1 (max):regular_ll:heightAboveGround:level 10 m:fcst time 6-7 hrs (max):from 202404080000
-    # sp2
-    # 1:Convective Available Potential Energy instantaneous:m**2 s**-2 (instant):regular_ll:unknown:levels 0-3000:fcst time 7 hrs:from 202404080000
-    # 2:193:193 (instant):regular_ll:surface:level 0:fcst time 7 hrs:from 202404080000
-    # 3:Graupel (snow pellets) precipitation rate:kg m-2 s-1 (accum):regular_ll:surface:level 0:fcst time 0-7 hrs (accum):from 202404080000
-    # 4:Surface pressure:Pa (instant):regular_ll:surface:level 0:fcst time 7 hrs:from 202404080000
-    # 5:Low cloud cover:% (instant):regular_ll:surface:level 0:fcst time 7 hrs:from 202404080000
-    # 6:High cloud cover:% (instant):regular_ll:surface:level 0:fcst time 7 hrs:from 202404080000
-    # 7:Medium cloud cover:% (instant):regular_ll:surface:level 0:fcst time 7 hrs:from 202404080000
-    # 8:Time integral of rain flux:kg m**-2 (accum):regular_ll:surface:level 0:fcst time 0-7 hrs (accum):from 202404080000
-    # 9:Snow precipitation rate:kg m**-2 s**-1 (accum):regular_ll:surface:level 0:fcst time 0-7 hrs (accum):from 202404080000
-    '''
 
-    return wind, rh, temp, rain
 
 def load_data_for_range(start, stop):
 
@@ -329,6 +394,14 @@ def loadSeaLandMask(flag_model, dirin, files):
 
         mask = np.where(mask==999,1,0)
 
+    elif flag_model == 'arome': 
+    
+        grib = pygrib.open('../dataStatic/CONSTANT_AROME_EURW1S100_2024.grb')
+        mask = grib.select()[1].values # =1 for land
+    
+        lat2d, lon2d = grib.select()[1].latlons()
+        
+
     else: 
         print('flag_model not defined yet: flag_model=',flag_model)
         print('stop here')
@@ -348,6 +421,11 @@ def getMeanLatitdue(flag_model, dirin, files):
         file = files[0]
         with xr.open_dataset(file) as ds: 
             meanlat = ds.LAT[1:-1,1:-1].mean() 
+    
+    elif flag_model == 'arome':
+        file = files[0]
+        grib = pygrib.open(file)
+        meanlat = grib.select()[1].latlons()[0].mean()
         
     else: 
         print('flag_model not defined yet: flag_model=',flag_model)

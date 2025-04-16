@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 import pandas as pd
 import sys 
 import xarray as xr 
+import rioxarray
 import importlib 
 import os 
 
@@ -370,9 +371,6 @@ class Indices:
             it+=1
 
 
-
-    
-
 ############
 def timeIntegration(dirin,flag_model,iseg):
 
@@ -408,7 +406,7 @@ def timeIntegration(dirin,flag_model,iseg):
         #        continue
         print(date, end=' ')
         
-        wind, humidity, temperature, rain = dataHandler.load_data_for_date(flag_model,file)
+        wind, humidity, temperature, rain = dataHandler.load_data_for_date(flag_model,date, file, it)
         #wind        # km/h
         #humidity    # % (<100)
         #temperature # C
@@ -463,11 +461,14 @@ def timeIntegration(dirin,flag_model,iseg):
             # fore ffmc
             ii = 0
             diff = 1.e6
-            while(diff > 1.e-6):
+            diff_threshold = 1.e-3
+            while(diff > diff_threshold):
                 ffmc1 = fwisystem.hFFMCcalc(ffmc0) 
-                diff = ((ffmc1 - ffmc0)**2).sum()
+                diff = ((ffmc1 - ffmc0)**2).sum() / ffmc1.flatten().shape[0]
+                print('spinup while {:.3e} > {:.3e}  '.format(diff,diff_threshold), end='\r')
                 ffmc0 = ffmc1
                 ii += 1
+            print('spinup done                                ')
             dmc1 = dmc0
             dc1  = dc0
         
@@ -560,9 +561,12 @@ if __name__ == '__main__':
         indices.test()
         sys.exit() 
     
-    dirin = '/data/paugam/MNH/Cat_PdV/006_mnhSolo'
-    flag_model = 'mnh'
-    iseg = 1
+    #dirin = '/data/paugam/MNH/Cat_PdV/006_mnhSolo'
+    #flag_model = 'mnh'
+    #iseg = 1
+    dirin = '/mnt/data3/SILEX/AROME/20250413/21Z/'
+    flag_model = 'arome'
+    iseg = -9999
     dataset, cexp = timeIntegration(dirin,flag_model,iseg)
 
     os.makedirs(dirin+'/Postproc/FWI/', exist_ok=True)
