@@ -28,7 +28,10 @@ class FWICLASS:
     ############
     def __init__(self,temp,rhum,wind,prcp,mask):
         self.updateMeteo(temp,rhum,wind,prcp)
-        self.mask = mask
+        if isinstance(wind, np.ndarray):
+            self.mask = np.where((mask==1) & (~wind.mask), 1, 0  )
+        else:
+            self.mask = mask
 
     def updateMeteo(self,temp,rhum,wind,prcp):
         self.h = rhum
@@ -385,9 +388,6 @@ def timeIntegration(dirin,flag_model,iseg):
   
     #init loop
     rain_last24h = []
-    ffmc00 = np.zeros(seaMask.shape) + 20.0 # valeurs prises dans la func initialisation plus bas. merci de valider 
-    dmc00 = np.zeros(seaMask.shape) + 6.0
-    dc00 = np.zeros(seaMask.shape) + 15.0
     time_seconds_last = 0
     #for output
     times_ffmc = []
@@ -407,6 +407,13 @@ def timeIntegration(dirin,flag_model,iseg):
         print(date, end=' ')
         
         wind, humidity, temperature, rain = dataHandler.load_data_for_date(flag_model,date, file, it)
+        if it ==0 : 
+            
+            mask_data = np.where((seaMask==1) & (~wind.mask), 1., 0 )
+            ffmc00 = mask_data * 20.0 # valeurs prises dans la func initialisation plus bas. merci de valider 
+            dmc00  = mask_data *  6.0
+            dc00   = mask_data * 15.0
+   
         #wind        # km/h
         #humidity    # % (<100)
         #temperature # C
@@ -476,7 +483,6 @@ def timeIntegration(dirin,flag_model,iseg):
             #ffmc1 =  0.75 * fwisystem.hFFMCcalc(ffmc0) +\
             #         0.25 * ffmc_arr[-1]
             ffmc1 =  fwisystem.hFFMCcalc(ffmc0) 
-
             if abs( time_seconds_since00 - (12*3600) ) < 1:  # if it is 12h00 update dmc and dc:
                 try: 
                     dmc1  = fwisystem.DMCcalc(dmc0,date_,latitude)
@@ -497,12 +503,12 @@ def timeIntegration(dirin,flag_model,iseg):
         times_ffmc.append(date) 
         times_ffmc_s.append( float(times_ffmc[-1]-date_array[0])/(1.e9) ) 
 
-        ffmc_arr.append(np.where(seaMask==1,ffmc1,np.nan))
-        dmc_arr.append(np.where(seaMask==1,dmc1,np.nan))
-        dc_arr.append(np.where(seaMask==1,dc1,np.nan))
-        isi_arr.append(np.where(seaMask==1,isi1,np.nan))
-        bui_arr.append(np.where(seaMask==1,bui1,np.nan))
-        fwi_arr.append(np.where(seaMask==1,fwi1,np.nan))
+        ffmc_arr.append(np.where((seaMask==1)& (~wind.mask),ffmc1,np.nan))
+        dmc_arr.append( np.where((seaMask==1)& (~wind.mask),dmc1,np.nan))
+        dc_arr.append(  np.where((seaMask==1)& (~wind.mask),dc1,np.nan))
+        isi_arr.append( np.where((seaMask==1)& (~wind.mask),isi1,np.nan))
+        bui_arr.append( np.where((seaMask==1)& (~wind.mask),bui1,np.nan))
+        fwi_arr.append( np.where((seaMask==1)& (~wind.mask),fwi1,np.nan))
 
     
     # Combine all arrays into one dictionary
@@ -564,7 +570,8 @@ if __name__ == '__main__':
     #dirin = '/data/paugam/MNH/Cat_PdV/006_mnhSolo'
     #flag_model = 'mnh'
     #iseg = 1
-    dirin = '/mnt/data3/SILEX/AROME/20250413/21Z/'
+    #dirin = '/mnt/data3/SILEX/AROME/20250413/21Z/'
+    dirin = '/mnt/dataEstrella2/SILEX/AROME/20250413/21Z/'
     flag_model = 'arome'
     iseg = -9999
     dataset, cexp = timeIntegration(dirin,flag_model,iseg)

@@ -209,7 +209,7 @@ def load_dates_and_filenames(flag_model, dirin, iseg):
                 out = np.append(out, time_)
             files_out.append(file)
 
-        cexp = None 
+        cexp = '{:s}.{:s}Z'.format(day_str,hour_str)
 
     else:   
         print('flag_model not defined yet: flag_model=',flag_model)
