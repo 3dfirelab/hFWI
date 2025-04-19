@@ -13,6 +13,10 @@ import xarray as xr
 import rioxarray
 import importlib 
 import os 
+import pickle 
+import tracemalloc
+import psutil
+import gc 
 
 #homebrewed
 import dataHandler
@@ -261,6 +265,14 @@ class FWICLASS:
         fwi[idx] = fwi_
         
         return fwi
+    
+    def self_destruct(self):
+        #print(f"{self.name} is destroying itself...")
+        # Optional: Clean up attributes
+        for attr in list(self.__dict__):
+            setattr(self, attr, None)
+        # Optional: Notify the GC
+        gc.collect()
 
 
 class Indices:
@@ -375,7 +387,7 @@ class Indices:
 
 
 ############
-def timeIntegration(dirin,flag_model,iseg):
+def timeIntegration(dirin,dirout,flag_model,iseg):
 
     date_array, files_array, cexp = dataHandler.load_dates_and_filenames(flag_model, dirin, iseg)
     seaMask,lat2d,lon2d = dataHandler.loadSeaLandMask(flag_model, dirin, files_array)
@@ -393,40 +405,65 @@ def timeIntegration(dirin,flag_model,iseg):
     times_ffmc = []
     times_ffmc_s = []
     ffmc_arr = []
-    dmc_arr = []
-    dc_arr = []
-    isi_arr = []
-    bui_arr = []
+    #dmc_arr = []
+    #dc_arr = []
+    #isi_arr = []
+    #bui_arr = []
     fwi_arr = []
 
-    for it, (time_seconds, date, file) in enumerate(zip(times_seconds,date_array,files_array)):
+    #check if a data save in FWI calculation from previous forecast can be used.
+    #we need the indices and rain_24 at t0 of the current run, as the loop below start at t0+dt
+    available_prev_fwi = sorted(glob.glob( dirout+"{:s}_previ_*.pkl".format( (pd.Timestamp(date_array[0])+timedelta(hours=-1)).strftime("%Y%m%dT%H%M")) ))
+    
+    if len(available_prev_fwi) > 0 : 
+        # Load the pickle file
+        with open(available_prev_fwi[-1], "rb") as f:
+            data_loaded = pickle.load(f)
 
-        #if it >0:
-        #    if (time_seconds - time_seconds_last) < 3600: 
-        #        continue
-        print(date, end=' ')
+        # Access the data
+        rain_last24h = data_loaded["rain24"]
+        ffmc1 = data_loaded["ffmc"]
+        dmc1 = data_loaded["dmc"]
+        dc1 = data_loaded["dc"]
+        fwi1 = data_loaded["fwi"]
         
+        times_ffmc.append( pd.Timestamp(date_array[0])+timedelta(hours=-1) )  
+        times_ffmc_s.append( float(0.) ) 
+        ffmc_arr.append(ffmc1)
+        fwi_arr.append(fwi1)
+
+        flag_spinup = False
+    else: 
+        flag_spinup = True
+
+    for it, (time_seconds, date, file) in enumerate(zip(times_seconds,date_array,files_array)):
+        
+        if it > 0: 
+            flag_spinup = False
+
+        print(pd.Timestamp(date).strftime("%Y%m%dT%H%M"), end=' ')
         wind, humidity, temperature, rain = dataHandler.load_data_for_date(flag_model,date, file, it)
-        if it ==0 : 
-            
-            mask_data = np.where((seaMask==1) & (~wind.mask), 1., 0 )
-            ffmc00 = mask_data * 20.0 # valeurs prises dans la func initialisation plus bas. merci de valider 
-            dmc00  = mask_data *  6.0
-            dc00   = mask_data * 15.0
-   
         #wind        # km/h
         #humidity    # % (<100)
         #temperature # C
         #rain        # mm
-
+        
+        if (it ==0): 
+            if (flag_spinup): 
+                mask_data = np.where((seaMask==1) & (~wind.mask), 1., 0 )
+                ffmc00 = mask_data * 20.0 # valeurs prises dans la func initialisation plus bas. merci de valider 
+                dmc00  = mask_data *  6.0
+                dc00   = mask_data * 15.0
+            
         rain_last24h.append(rain)
         if len(rain_last24h)>24: 
             rain_last24h = rain_last24h[1:]
+        print( ' lenRain24={:2d}'.format(len(rain_last24h)), end='' )
         rain0       = np.array(rain_last24h).sum(axis=0) # mm 
         #-- note: in the intergaration, before the end of the first day we are missing rain from the previous day
         
         date_ = datetime.strptime(str(date)[:-3], "%Y-%m-%dT%H:%M:%S.%f")
-        time_seconds_since00 = (date_.hour * 3600) + (date_.minute * 60) + date_.second
+        #time_seconds_since00 = (date_.hour * 3600) + (date_.minute * 60) + date_.second
         
         humidity  = np.where(humidity>100,100.,humidity)
                 
@@ -437,20 +474,18 @@ def timeIntegration(dirin,flag_model,iseg):
         
         #get previous time data if present
        
-
-        flag_spinup = False
-        if it == 0: 
-            flag_spinup = True
-        else:
+        
+        if it > 0:
             if np.abs((time_seconds-3600) - np.array(times_ffmc_s)).min() != 0 : #-1h data exist, otherwise do spinup
                 flag_spinup = True
         
         if not(flag_spinup) : #-1h data exist, otherwise do spinup
             ithm1 = np.abs((time_seconds-3600) - np.array(times_ffmc_s)).argmin()
             ffmc0 = ffmc_arr[ithm1]
-            dmc0  = dmc_arr[-1] # for dmc0 and dc0 we use always the last one to update at 12h
-            dc0   = dc_arr[-1]
-            print(' ')
+            dmc0  = dmc1 #dmc_arr[-1] # for dmc0 and dc0 we use always the last one to update at 12h
+            dc0   = dc1  #dc_arr[-1]
+            if it == 0 : 
+                print(' init from prev calculation: {:s}'.format(os.path.basename(available_prev_fwi[-1]).split('_')[-1].split('.pk')[0] ), end ='')
         else: 
             ffmc0 = ffmc00
             maskLand_ = fwisystem.mask
@@ -461,7 +496,7 @@ def timeIntegration(dirin,flag_model,iseg):
             #ffmc0[idx] = 0.5*(get_Ed(H_,T_) + get_Ew(H_,T_))
             dmc0  = dmc00
             dc0   = dc00
-            print (' spinOn, ffmc00 = ', ffmc0[idx].mean())
+            print (' spinOn, ffmc00 = ', ffmc0[idx].mean(), end ='\n')
        
         #if no previous, run spinup
         if flag_spinup: 
@@ -475,7 +510,7 @@ def timeIntegration(dirin,flag_model,iseg):
                 print('spinup while {:.3e} > {:.3e}  '.format(diff,diff_threshold), end='\r')
                 ffmc0 = ffmc1
                 ii += 1
-            print('spinup done                                ')
+            print('spinup done                                ', end='')
             dmc1 = dmc0
             dc1  = dc0
         
@@ -483,7 +518,8 @@ def timeIntegration(dirin,flag_model,iseg):
             #ffmc1 =  0.75 * fwisystem.hFFMCcalc(ffmc0) +\
             #         0.25 * ffmc_arr[-1]
             ffmc1 =  fwisystem.hFFMCcalc(ffmc0) 
-            if abs( time_seconds_since00 - (12*3600) ) < 1:  # if it is 12h00 update dmc and dc:
+            if  pd.Timestamp(date).hour == 12 : #abs( time_seconds_since00 - (12*3600) ) < 1:  # if it is 12h00 update dmc and dc:
+                print(' update dmc, dc', end='')
                 try: 
                     dmc1  = fwisystem.DMCcalc(dmc0,date_,latitude)
                     dc1   = fwisystem.DCcalc(dc0,date_,latitude)
@@ -492,6 +528,8 @@ def timeIntegration(dirin,flag_model,iseg):
             else: 
                 dmc1 = dmc0
                 dc1  = dc0
+        
+        print('')
 
         isi1  = fwisystem.ISIcalc(ffmc1)
         bui1  = fwisystem.BUIcalc(dmc1,dc1)
@@ -504,22 +542,41 @@ def timeIntegration(dirin,flag_model,iseg):
         times_ffmc_s.append( float(times_ffmc[-1]-date_array[0])/(1.e9) ) 
 
         ffmc_arr.append(np.where((seaMask==1)& (~wind.mask),ffmc1,np.nan))
-        dmc_arr.append( np.where((seaMask==1)& (~wind.mask),dmc1,np.nan))
-        dc_arr.append(  np.where((seaMask==1)& (~wind.mask),dc1,np.nan))
-        isi_arr.append( np.where((seaMask==1)& (~wind.mask),isi1,np.nan))
-        bui_arr.append( np.where((seaMask==1)& (~wind.mask),bui1,np.nan))
+        #dmc_arr.append( np.where((seaMask==1)& (~wind.mask),dmc1,np.nan))
+        #dc_arr.append(  np.where((seaMask==1)& (~wind.mask),dc1,np.nan))
+        #isi_arr.append( np.where((seaMask==1)& (~wind.mask),isi1,np.nan))
+        #bui_arr.append( np.where((seaMask==1)& (~wind.mask),bui1,np.nan))
         fwi_arr.append( np.where((seaMask==1)& (~wind.mask),fwi1,np.nan))
 
-    
+   
+        #at time of new previ we save rain_last24h and indices
+        if pd.Timestamp(date).hour % 3 == 0: 
+            # Combine everything in a dictionary (recommended for clarity)
+            data_to_pickle = {
+                "rain24": rain_last24h, 
+                "ffmc":   ffmc_arr[-1],
+                "dmc":    dmc1,
+                "dc":     dc1,
+                "fwi":    fwi_arr[-1]
+            }
+
+            # Dump to pickle
+            with open(dirout+"{:s}_previ_{:s}.pkl".format(pd.Timestamp(date).strftime("%Y%m%dT%H%M"),cexp), "wb") as f:
+                pickle.dump(data_to_pickle, f)
+            del data_to_pickle
+
+        fwisystem.self_destruct()
+
     # Combine all arrays into one dictionary
     data_dict = {
         "FFMC": ffmc_arr,
-        "DMC": dmc_arr,
-        "DC":  dc_arr,
-        "ISI": isi_arr,
-        "BUI": bui_arr,
+        #"DMC": dmc_arr,
+        #"DC":  dc_arr,
+        #"ISI": isi_arr,
+        #"BUI": bui_arr,
         "FWI": fwi_arr
     }
+    del ffmc_arr, fwi_arr
 
     # Create an xarray.DataArray for each variable
     data_arrays = {
@@ -534,10 +591,12 @@ def timeIntegration(dirin,flag_model,iseg):
         )
         for key, value in data_dict.items()
     }
-
+    del data_dict
 
     # Combine into a single xarray.Dataset
     ds = xr.Dataset(data_arrays)
+    ds['FFMC'] = ds['FFMC'].astype('float32')
+    ds['FWI'] = ds['FWI'].astype('float32')
     ds.rio.write_crs(4326) 
     ds.lon.attrs['long_name'] = "Longitude"
     ds.lon.attrs['units'] = "degrees_east"
@@ -548,6 +607,9 @@ def timeIntegration(dirin,flag_model,iseg):
     ds.lat.attrs['units'] = "degrees_north"
     ds.lat.attrs['axis'] = "Y"
     ds.lat.attrs['standard_name'] = "latitude"
+
+    del data_arrays
+    gc.collect()   # force garbage collection
 
     return ds.rio.write_crs(4326), cexp
     
@@ -570,12 +632,68 @@ if __name__ == '__main__':
     #dirin = '/data/paugam/MNH/Cat_PdV/006_mnhSolo'
     #flag_model = 'mnh'
     #iseg = 1
-    #dirin = '/mnt/data3/SILEX/AROME/20250413/21Z/'
-    dirin = '/mnt/dataEstrella2/SILEX/AROME/20250413/21Z/'
+    '''
+    dirin = '/mnt/data3/SILEX/AROME/20250413/18Z/'
+    #dirin = '/mnt/dataEstrella2/SILEX/AROME/20250413/21Z/'
     flag_model = 'arome'
     iseg = -9999
     dataset, cexp = timeIntegration(dirin,flag_model,iseg)
 
     os.makedirs(dirin+'/Postproc/FWI/', exist_ok=True)
     dataset.to_netcdf(dirin+'/Postproc/FWI/{:s}_fwi.nc'.format(cexp))
+    '''
+    
+    dirArome = '/mnt/data3/SILEX/AROME/'
+    dirout2 = dirArome+'FWI/'
+    os.makedirs(dirout2, exist_ok=True)
+    flag_model = 'arome'
+    iseg = -9999
+
+    start = datetime.strptime("20250412T0000", "%Y%m%dT%H%M")
+    end = datetime.strptime("20250413T2100", "%Y%m%dT%H%M")
+    step = timedelta(hours=3)
+
+    tracemalloc.start()
+
+    currentZ = start
+    while currentZ <= end:
+       
+        if os.path.isfile(dirout2+'/{:s}_fwiffmc.nc'.format(currentZ.strftime("%Y%m%d.%HZ"))): 
+            #next step
+            currentZ += step
+            continue
+        
+        print('##########')
+        print('FORECAST is now: ', currentZ.strftime("%Y%m%dT%H%M"))
+        print('##########')
+
+        dirprevi = currentZ.strftime("%Y%m%d/%HZ/")
+        dirin = dirArome + 'FORECAST/' + dirprevi
+        
+        dirout1 = dirArome+'IntermediateIndicesRainAcc/'
+        os.makedirs(dirout1, exist_ok=True)
+       
+        #FWI Calculation
+        dataset, cexp = timeIntegration(dirin,dirout1,flag_model,iseg)
+        dataset.to_netcdf(dirout2+'/{:s}_fwiffmc.nc'.format(cexp))
+        del dataset 
+
+        #collection time of file in dirout1 and remove all older that currentZ
+        files = glob.glob(dirout1+'*.pkl')
+        date_saved = []
+        for file in files:
+            date_saved.append(  datetime.strptime(os.path.basename(file).split('_p')[0], "%Y%m%dT%H%M") ) 
+        date_saved = np.array(date_saved)
+        idx_ = np.where(date_saved<currentZ)[0]
+        if len(idx_)>0:
+            for file in np.array(files)[idx_]:
+                os.remove(file)
+        #next step
+        currentZ += step
+
+        # Get the current process
+        process = psutil.Process(os.getpid())
+        # Get memory usage in GB
+        ram_used_gb = process.memory_info().rss / 1024**3
+        print(f"RAM used by the process: {ram_used_gb:.4f} GB")
 
