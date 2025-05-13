@@ -191,9 +191,10 @@ def load_dates_and_filenames(flag_model, dirin, iseg):
         files = sorted(glob.glob(dirin+'/*{:s}*.grib2'.format('SP1')))
         day_str =  os.path.basename(files[0]).split('.')[0]
         hour_str =  os.path.basename(files[0]).split('.')[1][:-1]
-   
-        base_dt = datetime.strptime(day_str + hour_str, "%Y%m%d%H") 
-        
+        try: 
+            base_dt = datetime.strptime(day_str + hour_str, "%Y%m%d%H") 
+        except: 
+            pdb.set_trace()
         out = None
         files_out = []
         for ifile, file, in enumerate(files):
@@ -396,7 +397,8 @@ def loadSeaLandMask(flag_model, dirin, files):
 
     elif flag_model == 'arome': 
     
-        grib = pygrib.open('../dataStatic/CONSTANT_AROME_EURW1S100_2024.grb')
+        current_file_dir = os.path.dirname(os.path.abspath(__file__))
+        grib = pygrib.open(current_file_dir+'/../dataStatic/CONSTANT_AROME_EURW1S100_2024.grb')
         mask = grib.select()[1].values # =1 for land
     
         lat2d, lon2d = grib.select()[1].latlons()

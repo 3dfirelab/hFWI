@@ -1,4 +1,5 @@
 import xarray as xr 
+import matplotlib as mpl 
 import matplotlib.pyplot as plt 
 import sys
 import os 
@@ -9,13 +10,89 @@ import numpy as np
 from pyproj import Transformer
 import glob 
 import pandas as pd
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+import shutil
+
+#############################
+def plot_latest(dirArome):
+    dirin = dirArome+'FWI/'
+
+    dirout = dirin+'/PLOT_latest/png/'
+    flag_model = 'arome'
+    if os.path.isdir(dirout):
+        shutil.rmtree(dirout)
+    os.makedirs(dirout, exist_ok=True)
+    
+    crshere = 3035
+
+    transformer = Transformer.from_crs("EPSG:4326", "EPSG:32631", always_xy=True)
+
+    fwifiles = sorted(glob.glob(dirin+'*.nc'))
+       
+    print( 'plot png in PLOT_latest dir for :', os.path.basename(fwifiles[-1]))
+    ds = xr.open_dataset(fwifiles[-1])
+    ds = ds.rio.write_crs(4326)
+    ds = ds.rio.reproject(crshere)
+    
+    projection = ccrs.epsg(ds.rio.crs.to_epsg())
+    levels = [0.0, 5.2, 11.2, 21.3, 38.0, 50.0,100]
+    colors = ["#008000", "#FFFF00", "#FFA500", "#FF0000", "#654321", "#000000"]
+    labels = ['Very low', 'Low', 'Moderate', 'High', 'Very high', 'Extreme']
+
+    mpl.rcdefaults()
+    mpl.rcParams['text.usetex'] = False
+    mpl.rcParams['figure.subplot.left'] = .05
+    mpl.rcParams['figure.subplot.right'] = .83
+    mpl.rcParams['figure.subplot.top'] = .92
+    mpl.rcParams['figure.subplot.bottom'] = .05
+
+    for it in range(ds.time.shape[0]):
+        fig, ax = plt.subplots(figsize=(10, 9), subplot_kw={'projection': projection})
+        
+        # Create a divider for the existing axes instance
+        #divider = make_axes_locatable(ax)
+
+        # Append a new axes to the right of ax with a fixed size and padding
+        #cax = divider.append_axes("right", size="5%", pad=0.05)
+
+        plot = ds.FWI.isel(time=it).plot(
+            levels=levels,
+            colors=colors,
+            add_colorbar=False,
+            ax=ax
+        )
+
+        # Add custom colorbar
+        cax = fig.add_axes([0.84, 0.1, 0.03, 0.76])  # adjust as needed
+
+        cbar = fig.colorbar(plot, cax=cax, ticks=[(levels[i] + levels[i+1]) / 2 for i in range(len(levels)-1)])
+        cbar.ax.set_yticklabels(labels)  # or use set_ticks + set_ticklabels for horizontal
+        cbar.set_label("FWI Class")  # Optional: label for the colorbar
+
+        ax.coastlines(resolution='10m', color='black', linewidth=1)
+        ax.add_feature(cfeature.BORDERS, linestyle=':')
+        ax.add_feature(cfeature.LAND, facecolor='lightgray')
+        ax.add_feature(cfeature.OCEAN, facecolor='lightblue')
+        gridlines = ax.gridlines(draw_labels=True, color='gray', alpha=0.5, linestyle='--')
+        gridlines.top_labels = False  # Turn off top labels
+        gridlines.right_labels = False  # Turn off right labels
+        gridlines.xlabel_style = {'size': 10, 'color': 'black'}
+        gridlines.ylabel_style = {'size': 10, 'color': 'black'}
+        ax.set_title('FWI-{:s}'.format(pd.to_datetime(ds.time[it].item()).strftime("%Y-%m-%dT%H%MZ (UTC)")))
+    
+        fig.savefig('{:s}/FWI-{:s}.png'.format(dirout,pd.to_datetime(ds.time[it].item()).strftime("%Y-%m-%dT%H%M")))
+        plt.close(fig)
 
 
 ###########################
 if __name__ == '__main__':
 ###########################
-    #dirArome = '/mnt/data3/SILEX/AROME/'
-    dirArome = '/mnt/dataEstrella2/SILEX/AROME/'
+    dirArome = '/mnt/data3/SILEX/AROME/'
+    #dirArome = '/mnt/dataEstrella2/SILEX/AROME/'
+    
+    plot_latest(dirArome)
+
+    sys.exit()
     dirin = dirArome+'FWI/'
 
     dirout = dirin+'/PLOT/'

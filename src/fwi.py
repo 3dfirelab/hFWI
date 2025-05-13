@@ -17,9 +17,13 @@ import pickle
 import tracemalloc
 import psutil
 import gc 
+import time
+from pathlib import Path
+
 
 #homebrewed
 import dataHandler
+import plot_fwi_arome
 
 def get_Ed(H,T):
     return 0.942*(H**0.679) + 11*(np.exp((H - 100)/10)) + 0.18*(21.1 - T)*(1 - np.exp(-0.115*H))
@@ -507,7 +511,7 @@ def timeIntegration(dirin,dirout,flag_model,iseg):
             while(diff > diff_threshold):
                 ffmc1 = fwisystem.hFFMCcalc(ffmc0) 
                 diff = ((ffmc1 - ffmc0)**2).sum() / ffmc1.flatten().shape[0]
-                print('spinup while {:.3e} > {:.3e}  '.format(diff,diff_threshold), end='\r')
+                #print('spinup while {:.3e} > {:.3e}  '.format(diff,diff_threshold), end='\r')
                 ffmc0 = ffmc1
                 ii += 1
             print('spinup done                                ', end='')
@@ -612,7 +616,19 @@ def timeIntegration(dirin,dirout,flag_model,iseg):
     gc.collect()   # force garbage collection
 
     return ds.rio.write_crs(4326), cexp
-    
+  
+
+###########################
+def get_two_level_dirs(base_path):
+    base = Path(base_path)
+    out = sorted([
+        p for p in base.rglob("*")
+        if p.is_dir()
+        and len(p.relative_to(base).parts) <= 2
+        and not (len(p.relative_to(base).parts) == 1 and p.name == "log")
+    ])
+    return out
+
 
 ###########################
 if __name__ == '__main__':
@@ -643,22 +659,41 @@ if __name__ == '__main__':
     dataset.to_netcdf(dirin+'/Postproc/FWI/{:s}_fwi.nc'.format(cexp))
     '''
     
-    dirArome = '/mnt/data3/SILEX/AROME/'
+    dirArome = sys.argv[1]  #'/mnt/data3/SILEX/AROME/'
     dirout2 = dirArome+'FWI/'
     os.makedirs(dirout2, exist_ok=True)
     flag_model = 'arome'
     iseg = -9999
+    
+    #get thelast complete download
+    #existingdir_sorted = get_two_level_dirs(dirArome+'FORECAST/')
+    #for dir_ in existingdir_sorted[::-1]:
+    #    last_forecastTime = datetime.strptime('T'.join(str(dir_).split('/')[-2:]), '%Y%m%dT%HZ')
+    #    dirout_ = '{:s}/{:s}/'.format(dirArome+'FORECAST/',last_forecastTime.strftime('%Y%m%d/%HZ'))
+    #    if len(glob.glob(dirout_+'*.grib2')) == 104:
+    #        break
+    with open(dirout2+'timeToCompute.txt', 'r') as f:
+        time_str = f.read().strip()
+    
+    start = datetime.strptime(time_str, '%Y%m%dT.%H%MZ')
+    step  = timedelta(hours=3)
+    end   = start + step 
+    if os.path.isfile(dirout2+'/{:s}_fwiffmc.nc'.format(start.strftime("%Y%m%d.%HZ"))):
+        sys.exit()
 
-    start = datetime.strptime("20250412T0000", "%Y%m%dT%H%M")
-    end = datetime.strptime("20250413T2100", "%Y%m%dT%H%M")
-    step = timedelta(hours=3)
+    #start = datetime.strptime("20250412T0000", "%Y%m%dT%H%M")
+    #end   = datetime.strptime("20250413T2100", "%Y%m%dT%H%M")
+    #step  = timedelta(hours=3)
+
+
 
     tracemalloc.start()
 
     currentZ = start
-    while currentZ <= end:
+    while currentZ < end:
        
-        if os.path.isfile(dirout2+'/{:s}_fwiffmc.nc'.format(currentZ.strftime("%Y%m%d.%HZ"))): 
+        start_time = time.time()  # Record start time
+        if False:# os.path.isfile(dirout2+'/{:s}_fwiffmc.nc'.format(currentZ.strftime("%Y%m%d.%HZ"))): 
             #next step
             currentZ += step
             continue
@@ -691,9 +726,16 @@ if __name__ == '__main__':
         #next step
         currentZ += step
 
-        # Get the current process
-        process = psutil.Process(os.getpid())
-        # Get memory usage in GB
-        ram_used_gb = process.memory_info().rss / 1024**3
-        print(f"RAM used by the process: {ram_used_gb:.4f} GB")
+    # Get the current process
+    process = psutil.Process(os.getpid())
+    # Get memory usage in GB
+    ram_used_gb = process.memory_info().rss / 1024**3
+    print(f"RAM used by the process: {ram_used_gb:.4f} GB")
+    
+    end_time = time.time()  # Record end time
+    elapsed_time = (end_time - start_time)/60  # Time used in iteration
+    print(f"cput time by FORECAST  : {elapsed_time:.6f} minutes")      
 
+    plot_fwi_arome.plot_latest(dirArome)
+    
+        
